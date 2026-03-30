@@ -65,6 +65,23 @@ HelloClaw 是一个基于 Hello-Agents 框架构建的个性化 AI Agent 应用�
 - Python 3.10+
 - Node.js 18+（可选，仅前端需要）
 
+### 创建虚拟环境
+
+```bash
+# 使用 venv（推荐）
+python -m venv .venv
+
+# 激活虚拟环境
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+# 或使用 uv（更快）
+uv venv
+uv sync
+```
+
 ### 安装依赖
 
 ```bash
