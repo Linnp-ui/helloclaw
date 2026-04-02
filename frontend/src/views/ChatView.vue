@@ -65,9 +65,46 @@ const expandedTools = ref<Set<number>>(new Set())
 const uploadedImages = ref<string[]>([])  // base64 图片列表
 const isUploading = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const isDragging = ref(false)
+const previewImage = ref<string | null>(null)
 
 // 最大图片大小 10MB
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024
+
+// 打开图片预览
+const openImagePreview = (img: string) => {
+  previewImage.value = img
+}
+
+// 关闭图片预览
+const closeImagePreview = () => {
+  previewImage.value = null
+}
+
+// 拖拽事件处理
+const handleDragEnter = (e: DragEvent) => {
+  e.preventDefault()
+  isDragging.value = true
+}
+
+const handleDragLeave = (e: DragEvent) => {
+  e.preventDefault()
+  isDragging.value = false
+}
+
+const handleDragOver = (e: DragEvent) => {
+  e.preventDefault()
+}
+
+const handleDrop = async (e: DragEvent) => {
+  e.preventDefault()
+  isDragging.value = false
+  
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+  
+  await processFiles(Array.from(files))
+}
 
 // 消息分组（Slack 风格）
 const messageGroups = computed<MessageGroup[]>(() => {
@@ -665,7 +702,16 @@ const handleImageSelect = async (event: Event) => {
   if (!input.files || input.files.length === 0) return
 
   const files = Array.from(input.files)
+  await processFiles(files)
 
+  // 清空 input 以允许重新选择同一文件
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ''
+  }
+}
+
+// 处理文件列表（供拖拽和选择使用）
+const processFiles = async (files: File[]) => {
   for (const file of files) {
     // 检查文件大小
     if (file.size > MAX_IMAGE_SIZE) {
@@ -686,11 +732,6 @@ const handleImageSelect = async (event: Event) => {
       console.error('图片上传失败:', error)
       message.error(`${file.name} 上传失败`)
     }
-  }
-
-  // 清空 input 以允许重新选择同一文件
-  if (fileInputRef.value) {
-    fileInputRef.value.value = ''
   }
 }
 
@@ -740,11 +781,14 @@ const startRecording = () => {
     let interimTranscript = ''
     
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript
-      if (event.results[i].isFinal) {
-        finalTranscript += transcript
-      } else {
-        interimTranscript += transcript
+      const result = event.results[i]
+      if (result && result[0]) {
+        const transcript = result[0].transcript
+        if (result.isFinal) {
+          finalTranscript += transcript
+        } else {
+          interimTranscript += transcript
+        }
       }
     }
     
@@ -904,7 +948,7 @@ onUnmounted(() => {
                 <!-- 用户消息：显示图片 -->
                 <div v-if="msg.images && msg.images.length > 0" class="message-images">
                   <div v-for="(img, imgIdx) in msg.images" :key="imgIdx" class="message-image-item">
-                    <img :src="getImageUrl(img)" class="message-image" />
+                    <img :src="getImageUrl(img)" class="message-image" @click="openImagePreview(img)" />
                   </div>
                 </div>
                 <!-- 用户消息：显示文本 -->
@@ -966,7 +1010,14 @@ onUnmounted(() => {
     </div>
 
     <!-- 输入区域 -->
-    <div class="chat-input-wrapper">
+    <div 
+      class="chat-input-wrapper"
+      :class="{ 'drag-over': isDragging }"
+      @dragenter="handleDragEnter"
+      @dragleave="handleDragLeave"
+      @dragover="handleDragOver"
+      @drop="handleDrop"
+    >
       <!-- 图片预览区域 -->
       <div v-if="uploadedImages.length > 0" class="image-preview-container">
         <div v-for="(img, index) in uploadedImages" :key="index" class="image-preview-item">
@@ -1080,6 +1131,16 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 图片预览弹窗 -->
+    <div 
+      v-if="previewImage" 
+      class="image-preview-modal"
+      @click="closeImagePreview"
+    >
+      <img :src="getImageUrl(previewImage)" class="preview-image" />
+      <button class="preview-close" @click="closeImagePreview">&times;</button>
     </div>
   </div>
 </template>
@@ -1348,6 +1409,30 @@ onUnmounted(() => {
   background-color: transparent;
   border-top: none;
   position: relative;
+  transition: all 0.3s ease;
+}
+
+.chat-input-wrapper.drag-over {
+  background-color: rgba(255, 117, 140, 0.1);
+  border: 2px dashed rgba(255, 117, 140, 0.5);
+  border-radius: 16px;
+  margin: 0 32px 16px;
+}
+
+.chat-input-wrapper.drag-over::before {
+  content: '松开鼠标上传图片';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 117, 140, 0.9);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 500;
+  z-index: 100;
+  pointer-events: none;
 }
 
 .chat-input {
@@ -1674,5 +1759,55 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.message-image:hover {
+  transform: scale(1.02);
+}
+
+/* 图片预览弹窗 */
+.image-preview-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  cursor: pointer;
+}
+
+.preview-image {
+  max-width: 90%;
+  max-height: 90%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.preview-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 32px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.preview-close:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 </style>
