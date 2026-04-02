@@ -30,10 +30,17 @@ class EnhancedSimpleAgent(SimpleAgent):
         如果使用普通 HelloAgentsLLM，流式工具调用将回退到基类的非流式模式。
     """
 
-    def _build_messages(self, input_text: str) -> List[Dict[str, Any]]:
-        """构建消息列表（支持 tool_calls）
+    def _build_messages(
+        self, input_text: str, images: List[str] = None
+    ) -> List[Dict[str, Any]]:
+        """构建消息列表（支持多模态）
 
-        重写基类方法，确保包含 metadata 中的 tool_calls 信息。
+        Args:
+            input_text: 用户输入文本
+            images: 图片 base64 列表
+
+        Returns:
+            消息列表
         """
         messages = []
 
@@ -52,8 +59,18 @@ class EnhancedSimpleAgent(SimpleAgent):
                     msg_dict["tool_call_id"] = msg.metadata["tool_call_id"]
             messages.append(msg_dict)
 
-        # 添加用户消息
-        messages.append({"role": "user", "content": input_text})
+        # 构建用户消息（支持多模态）
+        if images:
+            # 多模态消息格式
+            content_parts = []
+            for img in images:
+                content_parts.append({"type": "image_url", "image_url": {"url": img}})
+            if input_text:
+                content_parts.insert(0, {"type": "text", "text": input_text})
+            messages.append({"role": "user", "content": content_parts})
+        else:
+            # 纯文本消息
+            messages.append({"role": "user", "content": input_text})
 
         return messages
 
@@ -92,7 +109,7 @@ class EnhancedSimpleAgent(SimpleAgent):
         self._supports_streaming_tools = isinstance(llm, EnhancedHelloAgentsLLM)
 
     async def arun_stream_with_tools(
-        self, input_text: str, **kwargs
+        self, input_text: str, images: List[str] = None, **kwargs
     ) -> AsyncGenerator[StreamEvent, None]:
         """异步流式运行（支持工具调用）
 
@@ -112,11 +129,11 @@ class EnhancedSimpleAgent(SimpleAgent):
             StreamEventType.AGENT_START, self.name, input_text=input_text
         )
 
-        print(f"\n🤖 {self.name} 开始处理问题（流式）: {input_text}")
+        print(f"\nAgent {self.name} 开始处理问题（流式）: {input_text}")
 
         try:
             # 构建消息列表
-            messages = self._build_messages(input_text)
+            messages = self._build_messages(input_text, images)
 
             # 检查是否有工具
             if not self.enable_tool_calling or not self.tool_registry:
@@ -220,10 +237,10 @@ class EnhancedSimpleAgent(SimpleAgent):
                         if len(final_response) > 100
                         else final_response
                     )
-                    print(f"💬 直接回复: {preview}")
+                    print(f"直接回复: {preview}")
                     break
 
-                print(f"🔧 准备执行 {len(complete_tool_calls)} 个工具调用...")
+                print(f"准备执行 {len(complete_tool_calls)} 个工具调用...")
 
                 # 将助手消息添加到历史
                 assistant_message = result.to_assistant_message()
@@ -409,7 +426,7 @@ class EnhancedSimpleAgent(SimpleAgent):
         self.add_message(Message(messages[-1]["content"], "user"))
         self.add_message(Message(full_response, "assistant"))
 
-        print(f"💬 回复完成")
+        print(f"回复完成")
 
         yield StreamEvent.create(
             StreamEventType.AGENT_FINISH, self.name, result=full_response

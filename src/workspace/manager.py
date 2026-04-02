@@ -88,6 +88,22 @@ class WorkspaceManager:
             "base_url": llm_config.get("base_url") or os.getenv("LLM_BASE_URL"),
         }
 
+    def get_vision_config(self) -> dict:
+        """获取视觉模型配置
+
+        Returns:
+            包含 enabled, max_image_size 的字典
+        """
+        global_config = self.load_global_config()
+        vision_config = global_config.get("vision", {})
+
+        return {
+            "enabled": vision_config.get("enabled", False),
+            "max_image_size": vision_config.get(
+                "max_image_size", 10485760
+            ),  # 默认 10MB
+        }
+
     # ==================== 入职状态检测 ====================
 
     def is_onboarding_completed(self) -> bool:

@@ -1,7 +1,11 @@
 {
   "llm": {
-    "model_id": "",
-    "api_key": "",
-    "base_url": ""
+    "model_id": "glm-4v",
+    "api_key": "ca7dce999ea54078b533382c8b6490dd.0oVxPFNinjxQbuaF",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4"
+  },
+  "vision": {
+    "enabled": true,
+    "max_image_size": 10485760
   }
 }

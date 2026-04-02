@@ -105,7 +105,7 @@ async def list_sessions():
     if not agent:
         return SessionListResponse(sessions=[])
 
-    sessions = agent.list_sessions()
+    sessions = await agent.alist_sessions()
     return SessionListResponse(
         sessions=[
             SessionInfo(
@@ -142,7 +142,7 @@ async def create_session(request: SessionCreateRequest = None):
 
         # 如果没有指定旧会话，找最近的一个
         if not old_session_id:
-            sessions = agent.list_sessions()
+            sessions = await agent.alist_sessions()
             if sessions:
                 old_session_id = sessions[0]["id"]
 
@@ -175,7 +175,7 @@ async def _summarize_session(agent, session_id: str) -> Optional[str]:
         from ..memory import SessionSummarizer
 
         # 获取会话历史
-        messages = agent.get_session_history(session_id)
+        messages = await agent.aget_session_history(session_id)
         if not messages:
             return None
 
@@ -211,7 +211,7 @@ async def get_session(session_id: str):
     if not agent:
         raise HTTPException(status_code=500, detail="Agent not initialized")
 
-    sessions = agent.list_sessions()
+    sessions = await agent.alist_sessions()
     for s in sessions:
         if s["id"] == session_id:
             return SessionInfo(
@@ -231,7 +231,7 @@ async def get_session_history(session_id: str):
     if not agent:
         raise HTTPException(status_code=500, detail="Agent not initialized")
 
-    raw_messages = agent.get_session_history(session_id)
+    raw_messages = await agent.aget_session_history(session_id)
     if raw_messages is None:
         raw_messages = []
 

@@ -1,0 +1,15 @@
+Sending request to http://localhost:8000/api/chat/send/stream...
+Connected! Reading stream...
+
+event: session
+data: {"session_id": "f8367cca"}
+
+event: step_start
+data: {"step": 1, "max_steps": 10}
+
+event: done
+data: {"content": "抱歉，我无法回答这个问题。", "session_id": "f8367cca"}
+
+
+
+Stream Finished.

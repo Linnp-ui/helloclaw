@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onMounted } from 'vue'
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { Input, Button, message, Tag } from 'ant-design-vue'
-import { SendOutlined, PlusOutlined, StopOutlined, LoadingOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PlusOutlined, StopOutlined, LoadingOutlined, AudioOutlined, AudioFilled } from '@ant-design/icons-vue'
 import { useRouter, useRoute } from 'vue-router'
 import { sessionApi } from '@/api/session'
 import { chatApi } from '@/api/chat'
@@ -40,6 +40,7 @@ interface Message {
   content: string  // 用于从历史加载的消息
   timestamp: Date
   segments?: MessageSegment[]  // 用于流式消息的分段
+  images?: string[]  // 用户消息中的图片
 }
 
 interface MessageGroup {
@@ -60,6 +61,14 @@ const collapsedTools = ref<Set<number>>(new Set())
 // 默认所有工具都是展开的（用于新建的工具）
 const expandedTools = ref<Set<number>>(new Set())
 
+// 图片上传相关
+const uploadedImages = ref<string[]>([])  // base64 图片列表
+const isUploading = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// 最大图片大小 10MB
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024
+
 // 消息分组（Slack 风格）
 const messageGroups = computed<MessageGroup[]>(() => {
   const groups: MessageGroup[] = []
@@ -78,6 +87,24 @@ const messageGroups = computed<MessageGroup[]>(() => {
   }
 
   return groups
+})
+
+// 获取最新助手消息内容（用于语音播报）
+const currentAssistantContent = computed(() => {
+  const lastMsg = messages.value[messages.value.length - 1]
+  if (lastMsg?.role === 'assistant') {
+    // 如果有分段，取文本段内容
+    if (lastMsg.segments) {
+      for (const seg of lastMsg.segments) {
+        if (seg.type === 'text' && seg.content) {
+          return seg.content
+        }
+      }
+    }
+    // 否则取 content
+    return lastMsg.content
+  }
+  return ''
 })
 
 // 是否应该显示加载指示器（底部的独立指示器）
@@ -460,19 +487,24 @@ const updateMessageSegments = (msgIndex: number, segments: MessageSegment[]) => 
 }
 
 const sendMessage = async () => {
-  if (!inputMessage.value.trim()) return
+  if (!inputMessage.value.trim() && uploadedImages.value.length === 0) return
 
   const userMessage = inputMessage.value
   const userMsg: Message = {
     id: Date.now(),
     role: 'user',
     content: userMessage,
-    timestamp: new Date()
+    timestamp: new Date(),
+    images: uploadedImages.value.length > 0 ? [...uploadedImages.value] : undefined
   }
 
   messages.value.push(userMsg)
   inputMessage.value = ''
   loading.value = true
+
+  // 保存当前图片并在发送后清除
+  const currentImages = [...uploadedImages.value]
+  uploadedImages.value = []
 
   // 创建 AbortController
   abortController.value = new AbortController()
@@ -587,7 +619,8 @@ const sendMessage = async () => {
           message.error(event.error || '发送消息失败')
         }
       },
-      abortController.value.signal
+      abortController.value.signal,
+      currentImages.length > 0 ? currentImages : undefined
     )
 
     await scrollToBottom()
@@ -617,6 +650,175 @@ const createNewSession = async () => {
     message.error('新建会话失败')
   }
 }
+
+const getImageUrl = (url: string) => {
+  if (!url) return '';
+  if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('http')) return url;
+  // Fallback dev backend relative path
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  return `${baseUrl}/chat/${url}`;
+}
+
+// 处理图片选择
+const handleImageSelect = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  if (!input.files || input.files.length === 0) return
+
+  const files = Array.from(input.files)
+
+  for (const file of files) {
+    // 检查文件大小
+    if (file.size > MAX_IMAGE_SIZE) {
+      message.warning(`${file.name} 超过 10MB 限制，已跳过`)
+      continue
+    }
+
+    // 检查文件类型
+    if (!file.type.startsWith('image/')) {
+      message.warning(`${file.name} 不是图片文件，已跳过`)
+      continue
+    }
+
+    try {
+      const res = await chatApi.uploadFile(file)
+      uploadedImages.value.push(res.url)
+    } catch (error) {
+      console.error('图片上传失败:', error)
+      message.error(`${file.name} 上传失败`)
+    }
+  }
+
+  // 清空 input 以允许重新选择同一文件
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ''
+  }
+}
+
+// 移除图片
+const removeImage = (index: number) => {
+  uploadedImages.value.splice(index, 1)
+}
+
+// 触发文件选择
+const triggerFileSelect = () => {
+  fileInputRef.value?.click()
+}
+
+// 语音输入功能 (Web Speech API)
+const isRecording = ref(false)
+let speechRecognition: SpeechRecognition | null = null
+
+const initSpeechRecognition = () => {
+  const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition
+  if (!SpeechRecognition) {
+    message.warning('您的浏览器不支持语音输入，建议使用 Chrome 浏览器')
+    return null
+  }
+  
+  const recognition = new SpeechRecognition()
+  recognition.continuous = false
+  recognition.interimResults = true
+  recognition.lang = 'zh-CN'
+  
+  return recognition
+}
+
+const startRecording = () => {
+  if (!speechRecognition) {
+    speechRecognition = initSpeechRecognition()
+  }
+  
+  if (!speechRecognition) return
+  
+  speechRecognition.onstart = () => {
+    isRecording.value = true
+    message.info('开始语音输入...')
+  }
+  
+  speechRecognition.onresult = (event: SpeechRecognitionEvent) => {
+    let finalTranscript = ''
+    let interimTranscript = ''
+    
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript
+      if (event.results[i].isFinal) {
+        finalTranscript += transcript
+      } else {
+        interimTranscript += transcript
+      }
+    }
+    
+    if (finalTranscript) {
+      inputMessage.value += finalTranscript
+    }
+  }
+  
+  speechRecognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    console.error('语音识别错误:', event.error)
+    isRecording.value = false
+    if (event.error !== 'no-speech') {
+      message.error(`语音识别错误: ${event.error}`)
+    }
+  }
+  
+  speechRecognition.onend = () => {
+    isRecording.value = false
+  }
+  
+  speechRecognition.start()
+}
+
+const stopRecording = () => {
+  if (speechRecognition) {
+    speechRecognition.stop()
+    isRecording.value = false
+  }
+}
+
+// 语音输出功能 (Web Speech API TTS)
+const isSpeaking = ref(false)
+
+const speakText = (text: string) => {
+  if (!('speechSynthesis' in window)) {
+    message.warning('您的浏览器不支持语音合成')
+    return
+  }
+  
+  // 停止当前正在播放的语音
+  window.speechSynthesis.cancel()
+  
+  const utterance = new SpeechSynthesisUtterance(text)
+  utterance.lang = 'zh-CN'
+  utterance.rate = 1.0
+  utterance.pitch = 1.0
+  
+  utterance.onstart = () => {
+    isSpeaking.value = true
+  }
+  
+  utterance.onend = () => {
+    isSpeaking.value = false
+  }
+  
+  utterance.onerror = () => {
+    isSpeaking.value = false
+  }
+  
+  window.speechSynthesis.speak(utterance)
+}
+
+const stopSpeaking = () => {
+  window.speechSynthesis.cancel()
+  isSpeaking.value = false
+}
+
+// 页面卸载时停止语音
+onUnmounted(() => {
+  if (speechRecognition) {
+    speechRecognition.stop()
+  }
+  window.speechSynthesis.cancel()
+})
 </script>
 
 <template>
@@ -698,6 +900,22 @@ const createNewSession = async () => {
                 </template>
               </template>
               <!-- 如果没有分段，显示普通内容（历史消息） -->
+              <template v-if="msg.role === 'user'">
+                <!-- 用户消息：显示图片 -->
+                <div v-if="msg.images && msg.images.length > 0" class="message-images">
+                  <div v-for="(img, imgIdx) in msg.images" :key="imgIdx" class="message-image-item">
+                    <img :src="getImageUrl(img)" class="message-image" />
+                  </div>
+                </div>
+                <!-- 用户消息：显示文本 -->
+                <div v-if="msg.content" class="message-bubble">
+                  <div
+                    class="message-text"
+                    v-html="renderMarkdown(msg.content)"
+                  ></div>
+                </div>
+              </template>
+              <!-- 助手消息：显示文本 -->
               <div v-else-if="msg.content" class="message-bubble">
                 <div
                   class="message-text"
@@ -749,7 +967,25 @@ const createNewSession = async () => {
 
     <!-- 输入区域 -->
     <div class="chat-input-wrapper">
+      <!-- 图片预览区域 -->
+      <div v-if="uploadedImages.length > 0" class="image-preview-container">
+        <div v-for="(img, index) in uploadedImages" :key="index" class="image-preview-item">
+          <img :src="getImageUrl(img)" class="image-preview-img" />
+          <button class="image-remove-btn" @click="removeImage(index)" title="移除">×</button>
+        </div>
+      </div>
+      
       <div class="chat-input">
+        <!-- 隐藏的文件输入 -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept="image/*"
+          multiple
+          style="display: none"
+          @change="handleImageSelect"
+        />
+        
         <!-- 输入框 -->
         <Input.TextArea
           v-model:value="inputMessage"
@@ -759,6 +995,61 @@ const createNewSession = async () => {
         />
         <!-- 按钮区域（固定宽度） -->
         <div class="input-actions">
+          <!-- 语音输入按钮 -->
+          <Button
+            v-if="!isRecording"
+            class="icon-btn voice-btn"
+            @click="startRecording"
+            title="语音输入"
+          >
+            <template #icon>
+              <AudioOutlined />
+            </template>
+          </Button>
+          <!-- 录音中按钮 -->
+          <Button
+            v-else
+            class="icon-btn voice-btn recording"
+            @click="stopRecording"
+            title="停止录音"
+          >
+            <template #icon>
+              <AudioFilled />
+            </template>
+          </Button>
+          <!-- 语音输出按钮 -->
+          <Button
+            v-if="!isSpeaking"
+            class="icon-btn"
+            @click="currentAssistantContent && speakText(currentAssistantContent)"
+            :disabled="!currentAssistantContent"
+            title="语音播报"
+          >
+            <template #icon>
+              <span class="voice-icon">🔊</span>
+            </template>
+          </Button>
+          <!-- 停止播报按钮 -->
+          <Button
+            v-else
+            class="icon-btn"
+            @click="stopSpeaking"
+            title="停止播报"
+          >
+            <template #icon>
+              <span class="voice-icon">🔇</span>
+            </template>
+          </Button>
+          <!-- 图片上传按钮 -->
+          <Button
+            class="icon-btn"
+            @click="triggerFileSelect"
+            title="上传图片"
+          >
+            <template #icon>
+              <span class="image-icon">📷</span>
+            </template>
+          </Button>
           <!-- 新建会话按钮 -->
           <Button
             class="icon-btn"
@@ -778,9 +1069,9 @@ const createNewSession = async () => {
           >
             <div class="stop-icon"></div>
           </button>
-          <!-- 发送按钮（有文字时显示） -->
+          <!-- 发送按钮（有文字或图片时显示） -->
           <button
-            v-else-if="inputMessage.trim()"
+            v-else-if="inputMessage.trim() || uploadedImages.length > 0"
             class="send-btn active"
             @click="sendMessage"
             title="发送消息"
@@ -800,23 +1091,30 @@ const createNewSession = async () => {
   height: 100%;
   width: 100%;
   box-sizing: border-box;
-  background-color: var(--color-background);
+  background-color: transparent;
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 32px 40px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
+}
+
+/* 消息入场动画 */
+@keyframes slideInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 消息组样式 */
 .message-group {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   max-width: 85%;
+  animation: slideInUp 0.4s cubic-bezier(0.165, 0.84, 0.44, 1) forwards;
 }
 
 .message-group.user {
@@ -866,20 +1164,36 @@ const createNewSession = async () => {
 .message-bubble {
   display: inline-block;
   max-width: 100%;
+  transition: transform 0.2s ease;
+}
+
+.message-bubble:hover {
+  transform: translateY(-2px);
 }
 
 .message-text {
-  padding: 10px 14px;
-  border-radius: 12px;
-  background-color: var(--color-surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  line-height: 1.6;
+  padding: 14px 20px;
+  border-radius: 20px;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03), 0 1px 3px rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  line-height: 1.7;
   word-wrap: break-word;
+  color: #2c3e50;
+  font-size: 15px;
 }
 
 .message-group.user .message-text {
-  background-color: var(--color-primary-light);
-  border: 1px solid rgba(255, 92, 92, 0.2);
+  background: linear-gradient(135deg, #ff758c, #ff7eb3);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 15px rgba(255, 117, 140, 0.3);
+  border-bottom-right-radius: 4px;
+}
+
+.message-group.assistant .message-text {
+  border-bottom-left-radius: 4px;
 }
 
 /* Markdown 样式 */
@@ -1028,11 +1342,12 @@ const createNewSession = async () => {
   }
 }
 
-/* 输入区域 */
+/* 输入区域 悬浮胶囊 */
 .chat-input-wrapper {
-  padding: 16px 24px 32px;
-  background-color: var(--color-surface);
-  border-top: 1px solid var(--color-border);
+  padding: 0 40px 32px;
+  background-color: transparent;
+  border-top: none;
+  position: relative;
 }
 
 .chat-input {
@@ -1041,6 +1356,19 @@ const createNewSession = async () => {
   align-items: center;
   max-width: 800px;
   margin: 0 auto;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 24px;
+  padding: 8px 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.chat-input:focus-within {
+  box-shadow: 0 12px 40px rgba(255, 117, 140, 0.15), 0 0 0 2px rgba(255, 117, 140, 0.2);
+  transform: translateY(-2px);
 }
 
 .chat-input :deep(.ant-input) {
@@ -1048,6 +1376,10 @@ const createNewSession = async () => {
   border-radius: 16px;
   padding: 10px 16px;
   resize: none;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  font-size: 15px;
 }
 
 /* 按钮区域（固定宽度，防止输入框抖动） */
@@ -1147,12 +1479,19 @@ const createNewSession = async () => {
 }
 
 .tool-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 12px;
+  padding: 10px 14px;
   font-size: 13px;
-  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.tool-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
 /* 执行中状态 - 龙虾红主题 */
@@ -1260,5 +1599,80 @@ const createNewSession = async () => {
 .step-info {
   color: var(--color-text-secondary);
   font-size: 11px;
+}
+
+/* 图片上传预览 */
+.image-preview-container {
+  display: flex;
+  gap: 8px;
+  padding: 8px 40px;
+  max-width: 800px;
+  margin: 0 auto;
+  overflow-x: auto;
+}
+
+.image-preview-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--color-border);
+}
+
+.image-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-remove-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-remove-btn:hover {
+  background: rgba(255, 0, 0, 0.8);
+}
+
+/* 图片上传按钮图标 */
+.image-icon {
+  font-size: 16px;
+}
+
+/* 用户消息中的图片 */
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-image-item {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+
+.message-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 </style>

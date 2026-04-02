@@ -1,7 +1,7 @@
 """HelloClaw Agent - 基于 HelloAgents SimpleAgent 的个性化 AI 助手"""
 
 import os
-from typing import List
+from typing import List, Optional
 
 from hello_agents import Config
 from .enhanced_simple_agent import EnhancedSimpleAgent
@@ -330,7 +330,12 @@ class HelloClawAgent:
 
         return response
 
-    async def achat(self, message: str, session_id: str = None):
+    async def achat(
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        images: Optional[List[str]] = None,
+    ):
         """异步聊天（支持流式输出）
 
         Args:
@@ -344,14 +349,16 @@ class HelloClawAgent:
         import time
 
         t0 = time.time()
-        print(f"[⏱️ {t0:.3f}] achat 开始")
+        print(f"[timer {t0:.3f}] achat 开始")
 
         # 热加载配置（检测 config.json 变化）
         self._reload_llm_if_changed()
 
         # 动态更新系统提示词（检查 BOOTSTRAP 状态、读取最新配置）
         self._agent.system_prompt = self._build_system_prompt()
-        print(f"[⏱️ {time.time():.3f}] 系统提示词构建完成 (+{time.time() - t0:.3f}s)")
+        print(
+            f"[timer {time.time():.3f}] 系统提示词构建完成 (+{time.time() - t0:.3f}s)"
+        )
 
         # 如果没有 session_id，创建新的
         if not session_id:
@@ -368,7 +375,7 @@ class HelloClawAgent:
             else:
                 self._agent.clear_history()
                 self._memory_flush_manager.reset()
-        print(f"[⏱️ {time.time():.3f}] 会话加载完成 (+{time.time() - t0:.3f}s)")
+        print(f"[timer {time.time():.3f}] 会话加载完成 (+{time.time() - t0:.3f}s)")
 
         # 保存 session_id 供后续保存使用
         self._current_session_id = session_id
@@ -380,18 +387,22 @@ class HelloClawAgent:
         }
 
         t_llm = time.time()
-        print(f"[⏱️ {t_llm:.3f}] 开始调用 LLM ({self._model_id})...")
+        print(f"[timer {t_llm:.3f}] 开始调用 LLM ({self._model_id})...")
         first_chunk = True
 
-        async for event in self._agent.arun_stream_with_tools(message, **llm_kwargs):
+        async for event in self._agent.arun_stream_with_tools(
+            message, images=images, **llm_kwargs
+        ):
             if first_chunk and event.type.value == "llm_chunk":
                 print(
-                    f"[⏱️ {time.time():.3f}] 首个 token 到达 (LLM 延迟: {time.time() - t_llm:.3f}s)"
+                    f"[timer {time.time():.3f}] 首个 token 到达 (LLM 延迟: {time.time() - t_llm:.3f}s)"
                 )
                 first_chunk = False
             yield event
 
-        print(f"[⏱️ {time.time():.3f}] LLM 调用完成 (总耗时: {time.time() - t0:.3f}s)")
+        print(
+            f"[timer {time.time():.3f}] LLM 调用完成 (总耗时: {time.time() - t0:.3f}s)"
+        )
 
         # 对话结束后自动捕获记忆（异步执行，不阻塞用户）
         await self._capture_memories(message)
@@ -448,27 +459,47 @@ class HelloClawAgent:
 
     def _estimate_tokens(self) -> int:
         """估算当前上下文的 token 数
-
-        使用简单的字符估算方法。
-        对于中文，大约 1.5 字符/token；对于英文，大约 4 字符/token。
-        这里使用保守估算：字符数 / 3。
-
+        使用 tiktoken 进行较精确的 token 计算 (选用 cl100k_base 作为泛用分词器)。
+        如果 tiktoken 失败，则后备使用保守的字符估算：字符数 // 3。
         Returns:
             估算的 token 数
         """
-        total_chars = 0
+        try:
+            import tiktoken
 
-        # 系统提示词
-        if self._agent.system_prompt:
-            total_chars += len(self._agent.system_prompt)
+            encoding = tiktoken.get_encoding("cl100k_base")
+            total_tokens = 0
 
-        # 历史消息
-        for msg in self._agent._history:
-            if msg.content:
-                total_chars += len(msg.content)
+            # 系统提示词
+            if self._agent.system_prompt:
+                total_tokens += len(encoding.encode(self._agent.system_prompt))
 
-        # 保守估算：字符数 / 3
-        return total_chars // 3
+            # 历史消息
+            for msg in self._agent._history:
+                if msg.content:
+                    # 将内容统一视为字符串进行估算
+                    content_str = (
+                        msg.content
+                        if isinstance(msg.content, str)
+                        else str(msg.content)
+                    )
+                    total_tokens += len(encoding.encode(content_str))
+
+            return total_tokens
+        except ImportError:
+            # Fallback
+            total_chars = 0
+            if self._agent.system_prompt:
+                total_chars += len(self._agent.system_prompt)
+            for msg in self._agent._history:
+                if msg.content:
+                    content_str = (
+                        msg.content
+                        if isinstance(msg.content, str)
+                        else str(msg.content)
+                    )
+                    total_chars += len(content_str)
+            return total_chars // 3
 
     def save_current_session(self):
         """保存当前会话"""
@@ -534,6 +565,63 @@ class HelloClawAgent:
 
         return sorted(sessions, key=lambda x: x["updated_at"], reverse=True)
 
+    async def alist_sessions(self) -> List[dict]:
+        """异步列出所有会话"""
+        import json
+        import asyncio
+        import aiofiles
+
+        sessions_dir = os.path.join(self.workspace_path, "sessions")
+        if not os.path.exists(sessions_dir):
+            return []
+
+        sessions = []
+        filenames = [f for f in os.listdir(sessions_dir) if f.endswith(".json")]
+
+        async def _process_file(filename):
+            filepath = os.path.join(sessions_dir, filename)
+            try:
+                # 获取文件的元数据可以使用 asyncio.to_thread 防止阻塞
+                stat = await asyncio.to_thread(os.stat, filepath)
+
+                last_user_message = ""
+                async with aiofiles.open(filepath, "r", encoding="utf-8") as f:
+                    content_str = await f.read()
+                    data = json.loads(content_str)
+
+                history = data.get("history", [])
+                for msg in reversed(history):
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            for part in content:
+                                if (
+                                    isinstance(part, dict)
+                                    and part.get("type") == "text"
+                                ):
+                                    last_user_message = part.get("text", "")
+                                    break
+                        elif isinstance(content, str):
+                            last_user_message = content
+                        break
+
+                return {
+                    "id": filename[:-5],
+                    "created_at": stat.st_ctime,
+                    "updated_at": stat.st_mtime,
+                    "last_user_message": last_user_message[:50],
+                }
+            except Exception:
+                return None
+
+        # 并发读取解析所有文件
+        results = await asyncio.gather(*[_process_file(f) for f in filenames])
+        for res in results:
+            if res:
+                sessions.append(res)
+
+        return sorted(sessions, key=lambda x: x["updated_at"], reverse=True)
+
     def delete_session(self, session_id: str) -> bool:
         """删除会话"""
         filepath = os.path.join(self.workspace_path, "sessions", f"{session_id}.json")
@@ -554,34 +642,51 @@ class HelloClawAgent:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            messages = []
-            raw_history = data.get("history", [])
-            for msg in raw_history:
-                role = msg.get("role", "")
-                # 支持 user, assistant, tool 三种角色
-                if role in ("user", "assistant", "tool"):
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text_parts.append(part.get("text", ""))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        content = "\n".join(text_parts)
-
-                    # 构建消息对象，包含 metadata
-                    message_obj: dict = {"role": role, "content": content}
-                    # 保留 metadata（包含 tool_calls 或 tool_call_id）
-                    if "metadata" in msg:
-                        message_obj["metadata"] = msg["metadata"]
-
-                    messages.append(message_obj)
-
-            return messages
+            return self._format_raw_history(data.get("history", []))
         except Exception as e:
             print(f"Error loading session history: {e}")
             return []
+
+    async def aget_session_history(self, session_id: str) -> List[dict]:
+        """异步获取会话历史消息"""
+        import json
+        import aiofiles
+
+        filepath = os.path.join(self.workspace_path, "sessions", f"{session_id}.json")
+        if not os.path.exists(filepath):
+            return []
+
+        try:
+            async with aiofiles.open(filepath, "r", encoding="utf-8") as f:
+                content_str = await f.read()
+                data = json.loads(content_str)
+
+            return self._format_raw_history(data.get("history", []))
+        except Exception as e:
+            print(f"Error loading session history async: {e}")
+            return []
+
+    def _format_raw_history(self, raw_history: List[dict]) -> List[dict]:
+        """统一格式化 raw_history 到标准 messages 结构"""
+        messages = []
+        for msg in raw_history:
+            role = msg.get("role", "")
+            if role in ("user", "assistant", "tool"):
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    content = "\n".join(text_parts)
+
+                message_obj: dict = {"role": role, "content": content}
+                if "metadata" in msg:
+                    message_obj["metadata"] = msg["metadata"]
+                messages.append(message_obj)
+        return messages
 
     def clear_all_history(self):
         """清除 Agent 内存中的所有历史记录

@@ -44,19 +44,27 @@ export const chatApi = {
     })
   },
 
-  // 流式发送消息 (SSE) - 返回完整响应
+  // 流式发送消息 (SSE) - 支持图片
   sendMessageStream: async (
     message: string,
     sessionId: string | null | undefined,
     onChunk: StreamCallback,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    images?: string[]  // 图片引用路径列表（如 ["uploads/123.jpg"]）
   ): Promise<ChatResponse> => {
+    // 使用 JSON 方式发送
+    const payload = {
+      message,
+      session_id: sessionId || null,
+      images: images || null
+    }
+
     const response = await fetch(`${API_BASE}/api/chat/send/stream`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ message, session_id: sessionId }),
+      body: JSON.stringify(payload),
       signal,
     })
 
@@ -133,5 +141,20 @@ export const chatApi = {
     }
 
     return { content: fullContent, session_id: finalSessionId ?? null }
+  },
+
+  // 上传文件
+  uploadFile: async (file: File): Promise<{ url: string }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    
+    // 使用已配置好的 axios 实例，处理 CORS 和 baseUrl
+    const response = await api.post('/chat/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    
+    return response as unknown as { url: string }
   },
 }

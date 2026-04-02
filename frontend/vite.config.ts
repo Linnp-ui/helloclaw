@@ -17,11 +17,21 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        ws: true,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy, options) => {
+          proxy.on('error', (err, req, res) => {
+            console.error('Proxy error:', err)
+          })
+          proxy.on('econnreset', (err, req, res) => {
+            console.error('Connection reset:', err)
+          })
+        },
       },
     },
   },
