@@ -5,13 +5,15 @@ import os
 import uuid
 import base64
 import logging
-import time
-from typing import Optional, List, Union
-from fastapi import APIRouter, UploadFile, File, Form, Request
-from pydantic import BaseModel
-from sse_starlette.sse import EventSourceResponse
+from typing import Optional, List
 
-logging.basicConfig(level=logging.DEBUG)
+from fastapi import APIRouter, Request, UploadFile, File
+from fastapi.responses import EventSourceResponse
+from pydantic import BaseModel
+
+os.environ["SSE_STARLETTE_DEBUG"] = "0"
+
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])

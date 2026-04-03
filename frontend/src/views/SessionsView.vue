@@ -40,8 +40,11 @@ const deleteSession = async (id: string) => {
   try {
     await sessionApi.delete(id)
     message.success('删除成功')
+    // 清除当前会话缓存并重新加载
+    sessions.value = sessions.value.filter(s => s.id !== id)
     await loadSessions()
   } catch (error) {
+    console.error('删除会话失败:', error)
     message.error('删除失败')
   }
 }

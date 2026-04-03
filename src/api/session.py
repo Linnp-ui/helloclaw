@@ -79,6 +79,7 @@ class ChatMessage(BaseModel):
     content: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None  # assistant 消息中的工具调用
     tool_call_id: Optional[str] = None  # tool 消息中的调用 ID
+    images: Optional[List[str]] = None  # user 消息中的图片
 
 
 class SessionHistoryResponse(BaseModel):
@@ -244,7 +245,10 @@ async def get_session_history(session_id: str):
         metadata = m.get("metadata", {})
 
         if role == "user":
-            chat_messages.append(ChatMessage(role="user", content=content))
+            images = metadata.get("images")
+            chat_messages.append(
+                ChatMessage(role="user", content=content, images=images)
+            )
 
         elif role == "assistant":
             tool_calls_data = metadata.get("tool_calls")

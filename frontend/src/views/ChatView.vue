@@ -244,7 +244,8 @@ const loadSessionHistory = async (sessionId: string) => {
           id: Date.now() + i,
           role: 'user',
           content: msg.content || '',
-          timestamp: new Date()
+          timestamp: new Date(),
+          images: (msg as any).images || undefined
         })
       }
       else if (msg.role === 'assistant') {
@@ -1120,10 +1121,12 @@ onUnmounted(() => {
           >
             <div class="stop-icon"></div>
           </button>
-          <!-- 发送按钮（有文字或图片时显示） -->
+          <!-- 发送按钮 -->
           <button
-            v-else-if="inputMessage.trim() || uploadedImages.length > 0"
-            class="send-btn active"
+            v-else
+            class="send-btn"
+            :class="{ active: inputMessage.trim() || uploadedImages.length > 0 }"
+            :disabled="!inputMessage.trim() && uploadedImages.length === 0"
             @click="sendMessage"
             title="发送消息"
           >
@@ -1467,13 +1470,13 @@ onUnmounted(() => {
   font-size: 15px;
 }
 
-/* 按钮区域（固定宽度，防止输入框抖动） */
+/* 按钮区域（总是存在的5个按钮，动态适应宽度防止抖动） */
 .input-actions {
   flex-shrink: 0;
   display: flex;
   gap: 12px;
   align-items: center;
-  width: 92px;
+  width: max-content;
 }
 
 /* 新建会话按钮 */

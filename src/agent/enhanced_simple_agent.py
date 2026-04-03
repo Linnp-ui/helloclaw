@@ -117,6 +117,7 @@ class EnhancedSimpleAgent(SimpleAgent):
 
         Args:
             input_text: 用户输入
+            images: 图片列表
             **kwargs: 其他参数
 
         Yields:
@@ -348,7 +349,13 @@ class EnhancedSimpleAgent(SimpleAgent):
                     )
 
             # 保存到历史记录（按照 OpenAI 规范格式）
-            self.add_message(Message(input_text, "user"))
+            # 如果有图片，保存到 metadata 中
+            if images:
+                self.add_message(
+                    Message(input_text, "user", metadata={"images": images})
+                )
+            else:
+                self.add_message(Message(input_text, "user"))
 
             # 如果有工具调用，保存工具调用消息
             if tool_call_records:
@@ -423,7 +430,27 @@ class EnhancedSimpleAgent(SimpleAgent):
         print()
 
         # 保存历史
-        self.add_message(Message(messages[-1]["content"], "user"))
+        last_msg = messages[-1]
+        if isinstance(last_msg.get("content"), list):
+            # 多模态消息，提取文本和图片
+            text_content = ""
+            saved_images = []
+            for part in last_msg["content"]:
+                if part.get("type") == "text":
+                    text_content = part.get("text", "")
+                elif part.get("type") == "image_url":
+                    img_url = part.get("image_url", {}).get("url", "")
+                    if img_url:
+                        saved_images.append(img_url)
+
+            if saved_images:
+                self.add_message(
+                    Message(text_content, "user", metadata={"images": saved_images})
+                )
+            else:
+                self.add_message(Message(text_content, "user"))
+        else:
+            self.add_message(Message(last_msg.get("content", ""), "user"))
         self.add_message(Message(full_response, "assistant"))
 
         print(f"回复完成")
