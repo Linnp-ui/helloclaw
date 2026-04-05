@@ -1,9 +1,12 @@
 """记忆捕获管理器 - 自动识别并存储对话中的重要信息"""
 
 import asyncio
+import os
 import re
 from datetime import datetime
 from typing import List, Optional, Tuple
+
+from .hot_index import HotIndexManager
 
 
 # 记忆触发规则
@@ -26,9 +29,30 @@ MEMORY_TRIGGERS = [
 
 # 分类关键词（用于辅助分类）
 CATEGORY_KEYWORDS = {
-    "preference": ["喜欢", "偏好", "prefer", "like", "love", "hate", "讨厌", "不喜欢", "习惯", "习惯于"],
+    "preference": [
+        "喜欢",
+        "偏好",
+        "prefer",
+        "like",
+        "love",
+        "hate",
+        "讨厌",
+        "不喜欢",
+        "习惯",
+        "习惯于",
+    ],
     "decision": ["决定", "选定", "用这个", "确定", "choose", "decide", "decision"],
-    "entity": ["电话", "邮箱", "地址", "名字", "账号", "phone", "email", "address", "account"],
+    "entity": [
+        "电话",
+        "邮箱",
+        "地址",
+        "名字",
+        "账号",
+        "phone",
+        "email",
+        "address",
+        "account",
+    ],
     "fact": ["记住", "记下", "事实", "实际上", "remember", "fact"],
 }
 
@@ -56,6 +80,8 @@ class MemoryCaptureManager:
             (re.compile(pattern, re.IGNORECASE), category)
             for pattern, category in MEMORY_TRIGGERS
         ]
+        # Hot 索引管理器
+        self._hot_index = HotIndexManager(workspace_manager.workspace_path)
 
     def capture(self, text: str) -> List[dict]:
         """分析文本并捕获值得记忆的信息
@@ -97,11 +123,13 @@ class MemoryCaptureManager:
                 continue
 
             seen_contents.add(content_key)
-            memories.append({
-                "content": content,
-                "category": category,
-                "timestamp": datetime.now().strftime("%H:%M"),
-            })
+            memories.append(
+                {
+                    "content": content,
+                    "category": category,
+                    "timestamp": datetime.now().strftime("%H:%M"),
+                }
+            )
 
         return memories
 
@@ -133,10 +161,17 @@ class MemoryCaptureManager:
 
         for memory in memories:
             try:
+                # 存储到每日记忆文件
                 self.workspace.append_classified_memory(
                     content=memory["content"],
                     category=memory["category"],
                     date=date,
+                )
+                # 同时更新 Hot 索引
+                self._hot_index.add_entry(
+                    content=memory["content"],
+                    category=memory["category"],
+                    source=(date or datetime.now()).strftime("%Y-%m-%d"),
                 )
                 stored.append(memory)
             except Exception as e:
@@ -155,9 +190,7 @@ class MemoryCaptureManager:
             实际存储的记忆列表
         """
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, self.capture_and_store, text, date
-        )
+        return await loop.run_in_executor(None, self.capture_and_store, text, date)
 
     def _split_sentences(self, text: str) -> List[str]:
         """将文本分割为句子
@@ -170,7 +203,7 @@ class MemoryCaptureManager:
         """
         # 按常见分隔符分割
         # 支持中英文句号、问号、感叹号、换行
-        sentences = re.split(r'[。！？.!?]\s*|\n+', text)
+        sentences = re.split(r"[。！？.!?]\s*|\n+", text)
         return [s.strip() for s in sentences if s.strip()]
 
     def _match_trigger(self, sentence: str) -> Optional[str]:
@@ -201,10 +234,10 @@ class MemoryCaptureManager:
         content = sentence.strip()
 
         # 移除前缀（如"用户："、"我："等）
-        content = re.sub(r'^(用户|我|你|assistant|user)[：:]\s*', '', content)
+        content = re.sub(r"^(用户|我|你|assistant|user)[：:]\s*", "", content)
 
         # 移除引号
-        content = content.strip('"\'""''')
+        content = content.strip('"\'""')
 
         # 如果内容太短，可能是噪声
         if len(content) < 5:
@@ -263,7 +296,7 @@ class MemoryCaptureManager:
             for category in stats:
                 if category != "total":
                     # 统计 [category] 标签出现次数
-                    pattern = rf'\[{category}\]'
+                    pattern = rf"\[{category}\]"
                     count = len(re.findall(pattern, content, re.IGNORECASE))
                     stats[category] = count
                     stats["total"] += count

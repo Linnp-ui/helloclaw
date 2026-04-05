@@ -10,6 +10,7 @@ from .enhanced_llm import (
 )  # HelloClaw 专用 LLM（支持流式工具调用）
 from ..memory.memory_flush import MemoryFlushManager
 from ..memory.capture import MemoryCaptureManager
+from ..memory.hot_index import HotIndexManager
 from hello_agents.tools import (
     ToolRegistry,
     ReadTool,
@@ -112,16 +113,20 @@ class HelloClawAgent:
             max_tool_iterations=max_tool_iterations,
         )
 
-        # 初始化 Memory Flush 管理器
+        # 初始化 Memory Flush 管理器（带五级压缩）
         self._memory_flush_manager = MemoryFlushManager(
             context_window=self.config.context_window,
             compression_threshold=self.config.compression_threshold,
             soft_threshold_tokens=4000,
             enabled=True,
+            workspace_path=self.workspace_path,
         )
 
         # 初始化 Memory Capture 管理器
         self._memory_capture_manager = MemoryCaptureManager(self.workspace)
+
+        # 初始化 Hot 记忆索引管理器
+        self._hot_index_manager = HotIndexManager(self.workspace_path)
 
     def _read_identity_name(self) -> str:
         """从 IDENTITY.md 读取助手名称
@@ -249,10 +254,12 @@ class HelloClawAgent:
         if soul:
             context_parts.append(f"\n## 人格模板\n{soul}")
 
-        # 长期记忆
+        # 长期记忆（Hot 层 - 指针索引）
         memory = self.workspace.load_config("MEMORY")
         if memory:
-            context_parts.append(f"\n## 长期记忆\n{memory}")
+            # 使用 Hot 索引的精简版（指针）而非完整内容
+            hot_index = self._hot_index_manager.get_compact_index()
+            context_parts.append(f"\n## 长期记忆（索引）\n{hot_index}")
 
         if context_parts:
             return base_prompt + "\n" + "\n".join(context_parts)

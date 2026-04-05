@@ -1,4 +1,5 @@
 """记忆 API 路由"""
+
 import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/memory", tags=["memory"])
 
 class MemoryEntry(BaseModel):
     """记忆条目"""
+
     date: str
     filename: str
     content: str
@@ -21,12 +23,14 @@ class MemoryEntry(BaseModel):
 
 class MemoryListResponse(BaseModel):
     """记忆列表响应"""
+
     memories: List[MemoryEntry]
     total: int
 
 
 class MemoryStatsResponse(BaseModel):
     """记忆统计响应"""
+
     total_files: int
     daily_files: int
     total_size: int
@@ -35,12 +39,14 @@ class MemoryStatsResponse(BaseModel):
 
 class MemoryCaptureRequest(BaseModel):
     """记忆捕获请求"""
+
     content: str
     category: str = "fact"  # preference/decision/entity/fact
 
 
 class MemoryCaptureResponse(BaseModel):
     """记忆捕获响应"""
+
     status: str
     message: str
     category: str
@@ -48,6 +54,7 @@ class MemoryCaptureResponse(BaseModel):
 
 class MemoryCleanupResponse(BaseModel):
     """记忆清理响应"""
+
     status: str
     deleted: List[str]
     message: str
@@ -75,12 +82,12 @@ def get_workspace() -> WorkspaceManager:
 def get_preview(content: str, max_length: int = 100) -> str:
     """获取内容预览"""
     # 移除 markdown 标记，获取纯文本预览
-    lines = content.strip().split('\n')
+    lines = content.strip().split("\n")
     for line in lines:
         line = line.strip()
-        if line and not line.startswith('#'):
-            return line[:max_length] + ('...' if len(line) > max_length else '')
-    return '(空)'
+        if line and not line.startswith("#"):
+            return line[:max_length] + ("..." if len(line) > max_length else "")
+    return "(空)"
 
 
 # ==================== 静态路由（必须在 /{filename} 之前）====================
@@ -89,7 +96,7 @@ def get_preview(content: str, max_length: int = 100) -> str:
 @router.get("/list", response_model=MemoryListResponse)
 async def list_memories(
     category: Optional[str] = Query(None, description="按分类过滤"),
-    ws: WorkspaceManager = Depends(get_workspace)
+    ws: WorkspaceManager = Depends(get_workspace),
 ):
     """获取每日记忆列表（支持分类过滤）
 
@@ -102,31 +109,33 @@ async def list_memories(
 
     if os.path.exists(ws.memory_path):
         files = sorted(
-            [f for f in os.listdir(ws.memory_path) if f.endswith('.md')],
-            reverse=True  # 最新的在前面
+            [f for f in os.listdir(ws.memory_path) if f.endswith(".md")],
+            reverse=True,  # 最新的在前面
         )
 
         for filename in files:
             filepath = os.path.join(ws.memory_path, filename)
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
             # 如果指定了分类，检查是否包含该分类的标签
             if category:
-                pattern = rf'\[{category}\]'
+                pattern = rf"\[{category}\]"
                 if not re.search(pattern, content, re.IGNORECASE):
                     continue
 
             # 从文件名提取日期 (YYYY-MM-DD.md)
-            date = filename.replace('.md', '')
+            date = filename.replace(".md", "")
 
-            memories.append(MemoryEntry(
-                date=date,
-                filename=filename,
-                content=content,
-                preview=get_preview(content),
-                category=category
-            ))
+            memories.append(
+                MemoryEntry(
+                    date=date,
+                    filename=filename,
+                    content=content,
+                    preview=get_preview(content),
+                    category=category,
+                )
+            )
 
     return MemoryListResponse(memories=memories, total=len(memories))
 
@@ -149,17 +158,17 @@ async def get_memory_stats(ws: WorkspaceManager = Depends(get_workspace)):
     # 统计每日记忆
     if os.path.exists(ws.memory_path):
         for filename in os.listdir(ws.memory_path):
-            if filename.endswith('.md'):
+            if filename.endswith(".md"):
                 filepath = os.path.join(ws.memory_path, filename)
                 total_files += 1
                 daily_files += 1
                 total_size += os.path.getsize(filepath)
 
                 # 统计各分类标签数量
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
                 for cat in categories:
-                    pattern = rf'\[{cat}\]'
+                    pattern = rf"\[{cat}\]"
                     count = len(re.findall(pattern, content, re.IGNORECASE))
                     categories[cat] += count
 
@@ -173,7 +182,7 @@ async def get_memory_stats(ws: WorkspaceManager = Depends(get_workspace)):
         total_files=total_files,
         daily_files=daily_files,
         total_size=total_size,
-        categories=categories
+        categories=categories,
     )
 
 
@@ -186,8 +195,7 @@ async def add_to_today(content: str, ws: WorkspaceManager = Depends(get_workspac
 
 @router.post("/capture", response_model=MemoryCaptureResponse)
 async def capture_memory(
-    request: MemoryCaptureRequest,
-    ws: WorkspaceManager = Depends(get_workspace)
+    request: MemoryCaptureRequest, ws: WorkspaceManager = Depends(get_workspace)
 ):
     """手动添加记忆（带分类）"""
     # 验证分类
@@ -195,15 +203,13 @@ async def capture_memory(
     if request.category not in valid_categories:
         raise HTTPException(
             status_code=400,
-            detail=f"无效的分类: {request.category}，有效值: {valid_categories}"
+            detail=f"无效的分类: {request.category}，有效值: {valid_categories}",
         )
 
     # 检查重复
     if ws.check_duplicate_memory(request.content, threshold=0.7):
         return MemoryCaptureResponse(
-            status="skipped",
-            message="记忆已存在，跳过",
-            category=request.category
+            status="skipped", message="记忆已存在，跳过", category=request.category
         )
 
     # 存储记忆
@@ -212,23 +218,226 @@ async def capture_memory(
     return MemoryCaptureResponse(
         status="ok",
         message=f"已添加 [{request.category}] 记忆",
-        category=request.category
+        category=request.category,
     )
 
 
 @router.post("/cleanup", response_model=MemoryCleanupResponse)
 async def cleanup_memories(
     days: int = Query(30, description="保留天数"),
-    ws: WorkspaceManager = Depends(get_workspace)
+    ws: WorkspaceManager = Depends(get_workspace),
 ):
     """清理过期记忆"""
     deleted = ws.cleanup_old_memories(days)
 
     return MemoryCleanupResponse(
-        status="ok",
-        deleted=deleted,
-        message=f"已清理 {len(deleted)} 个过期记忆文件"
+        status="ok", deleted=deleted, message=f"已清理 {len(deleted)} 个过期记忆文件"
     )
+
+
+# ==================== Cold 层 API - 归档与搜索 ====================
+
+
+class ArchiveResponse(BaseModel):
+    """归档响应"""
+
+    status: str
+    archived: int
+    failed: int
+    message: str
+
+
+class SearchResult(BaseModel):
+    """搜索结果"""
+
+    session_id: str
+    date: str
+    role: str
+    content: str
+    tokens: int
+
+
+class SearchResponse(BaseModel):
+    """搜索响应"""
+
+    results: List[SearchResult]
+    total: int
+    query: str
+
+
+class ArchiveStatsResponse(BaseModel):
+    """归档统计响应"""
+
+    total_files: int
+    total_records: int
+    years: List[str]
+    by_role: Dict[str, int]
+
+
+@router.post("/archive", response_model=ArchiveResponse)
+async def archive_sessions(ws: WorkspaceManager = Depends(get_workspace)):
+    """归档所有会话到 .jsonl 格式"""
+    from ..memory.session_archive import SessionArchiveManager
+
+    archive_mgr = SessionArchiveManager(ws.workspace_path)
+    result = archive_mgr.archive_all_sessions()
+
+    return ArchiveResponse(
+        status="ok",
+        archived=result["archived"],
+        failed=result["failed"],
+        message=f"已归档 {result['archived']} 个会话",
+    )
+
+
+@router.get("/search", response_model=SearchResponse)
+async def search_memories(
+    q: str = Query(..., description="搜索关键词"),
+    year: Optional[str] = Query(None, description="年份筛选"),
+    role: Optional[str] = Query(None, description="角色筛选 (user/assistant)"),
+    limit: int = Query(50, description="返回结果上限"),
+    ws: WorkspaceManager = Depends(get_workspace),
+):
+    """在归档中搜索历史对话"""
+    from ..memory.session_archive import SessionArchiveManager
+
+    archive_mgr = SessionArchiveManager(ws.workspace_path)
+    results = archive_mgr.jsonl_search(
+        keyword=q,
+        year=year,
+        role_filter=role,
+        limit=limit,
+    )
+
+    return SearchResponse(
+        results=[
+            SearchResult(
+                session_id=r.get("session_id", ""),
+                date=r.get("date", ""),
+                role=r.get("role", ""),
+                content=r.get("content", ""),
+                tokens=r.get("tokens", 0),
+            )
+            for r in results
+        ],
+        total=len(results),
+        query=q,
+    )
+
+
+@router.get("/archive/stats", response_model=ArchiveStatsResponse)
+async def get_archive_stats(ws: WorkspaceManager = Depends(get_workspace)):
+    """获取归档统计信息"""
+    from ..memory.session_archive import SessionArchiveManager
+
+    archive_mgr = SessionArchiveManager(ws.workspace_path)
+    stats = archive_mgr.get_archive_stats()
+
+    return ArchiveStatsResponse(**stats)
+
+
+# ==================== Warm 层 API - 话题管理 ====================
+
+
+class TopicInfo(BaseModel):
+    """话题信息"""
+
+    filename: str
+    title: str
+    tags: List[str]
+    relevance: float
+    created: str
+    preview: str
+
+
+class TopicListResponse(BaseModel):
+    """话题列表响应"""
+
+    topics: List[TopicInfo]
+    total: int
+
+
+class TopicResponse(BaseModel):
+    """话题响应"""
+
+    filename: str
+    title: str
+    tags: List[str]
+    content: str
+
+
+@router.get("/topics", response_model=TopicListResponse)
+async def list_topics(
+    q: Optional[str] = Query(None, description="搜索关键词"),
+    max_topics: int = Query(5, description="返回数量"),
+    ws: WorkspaceManager = Depends(get_workspace),
+):
+    """获取相关话题列表（Warm 层）"""
+    from ..memory.topic_manager import TopicManager
+
+    topic_mgr = TopicManager(ws.workspace_path)
+
+    if q:
+        topics = topic_mgr.find_relevant_topics(query=q, max_topics=max_topics)
+    else:
+        topics = topic_mgr.list_topics()[:max_topics]
+
+    return TopicListResponse(
+        topics=[
+            TopicInfo(
+                filename=t["filename"],
+                title=t["title"],
+                tags=t.get("tags", []),
+                relevance=t["relevance"],
+                created=t.get("created", ""),
+                preview=t.get("preview", ""),
+            )
+            for t in topics
+        ],
+        total=len(topics),
+    )
+
+
+@router.get("/topics/{filename}", response_model=TopicResponse)
+async def get_topic(filename: str, ws: WorkspaceManager = Depends(get_workspace)):
+    """获取话题详细内容（按需加载）"""
+    from ..memory.topic_manager import TopicManager
+
+    topic_mgr = TopicManager(ws.workspace_path)
+    topic = topic_mgr.get_topic(filename)
+
+    if not topic:
+        raise HTTPException(status_code=404, detail=f"话题 {filename} 不存在")
+
+    return TopicResponse(
+        filename=topic["filename"],
+        title=topic["frontmatter"].get("title", ""),
+        tags=topic["frontmatter"].get("tags", []),
+        content=topic["content"],
+    )
+
+
+# ==================== Hot 层 API - 索引 ====================
+
+
+class HotIndexStatsResponse(BaseModel):
+    """Hot 索引统计响应"""
+
+    total: int
+    categories: Dict[str, int]
+    size_bytes: int
+    last_updated: str
+
+
+@router.get("/hot/stats", response_model=HotIndexStatsResponse)
+async def get_hot_index_stats(ws: WorkspaceManager = Depends(get_workspace)):
+    """获取 Hot 索引统计"""
+    from ..memory.hot_index import HotIndexManager
+
+    hot_index = HotIndexManager(ws.workspace_path)
+    stats = hot_index.get_stats()
+
+    return HotIndexStatsResponse(**stats)
 
 
 # ==================== 动态路由（必须放在最后）====================
@@ -237,19 +446,19 @@ async def cleanup_memories(
 @router.get("/{filename}")
 async def get_memory(filename: str, ws: WorkspaceManager = Depends(get_workspace)):
     """获取指定日期的记忆内容"""
-    if not filename.endswith('.md'):
-        filename += '.md'
+    if not filename.endswith(".md"):
+        filename += ".md"
 
     filepath = os.path.join(ws.memory_path, filename)
 
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail=f"记忆文件 {filename} 不存在")
 
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
 
     return {
         "filename": filename,
-        "date": filename.replace('.md', ''),
-        "content": content
+        "date": filename.replace(".md", ""),
+        "content": content,
     }

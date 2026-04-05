@@ -51,6 +51,9 @@ class WorkspaceManager:
         self.memory_path = os.path.join(self.workspace_path, "memory")
         self.sessions_path = os.path.join(self.workspace_path, "sessions")
         self.skills_path = os.path.join(self.workspace_path, "skills")
+        self.topics_path = os.path.join(self.workspace_path, "topics")
+        self.archive_path = os.path.join(self.workspace_path, "archive")
+        self.cache_path = os.path.join(self.workspace_path, "cache")
 
     # ==================== 全局配置读取 ====================
 
@@ -130,6 +133,9 @@ class WorkspaceManager:
         os.makedirs(self.memory_path, exist_ok=True)
         os.makedirs(self.sessions_path, exist_ok=True)
         os.makedirs(self.skills_path, exist_ok=True)
+        os.makedirs(self.topics_path, exist_ok=True)  # Warm 层话题目录
+        os.makedirs(self.archive_path, exist_ok=True)  # Cold 层归档目录
+        os.makedirs(self.cache_path, exist_ok=True)  # Microcompact 缓存目录
 
         # 创建默认配置文件
         for config_name in CONFIG_FILES:
