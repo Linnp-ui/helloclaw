@@ -213,7 +213,7 @@ async def capture_memory(
         )
 
     # 存储记忆
-    ws.append_classified_memory(request.content, request.category)
+    ws.append_classified_memory(request.content, request.category, source="user")
 
     return MemoryCaptureResponse(
         status="ok",

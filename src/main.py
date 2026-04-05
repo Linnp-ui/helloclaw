@@ -3,9 +3,19 @@ HelloClaw Backend - FastAPI 入口
 """
 
 import os
+import sys
+import io
 
 # 禁用 PYTHONSTARTUP 以避免 I/O 问题
 os.environ.pop("PYTHONSTARTUP", None)
+
+# 设置默认编码为utf-8
+import locale
+locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+
+# 确保环境变量中的编码设置正确
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+os.environ['LANG'] = 'en_US.UTF-8'
 
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv

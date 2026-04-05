@@ -8,6 +8,7 @@ from .enhanced_simple_agent import EnhancedSimpleAgent
 from .enhanced_llm import (
     EnhancedHelloAgentsLLM,
 )  # HelloClaw 专用 LLM（支持流式工具调用）
+from .response_sanitizer import sanitize_user_facing_text
 from ..memory.memory_flush import MemoryFlushManager
 from ..memory.capture import MemoryCaptureManager
 from ..memory.hot_index import HotIndexManager
@@ -77,9 +78,6 @@ class HelloClawAgent:
         self._override_api_key = api_key
         self._override_base_url = base_url
 
-        # 构建系统提示词（从 AGENTS.md 读取）
-        system_prompt = self._build_system_prompt()
-
         # 初始化 LLM（从 config.json 读取配置）
         self._init_llm()
 
@@ -102,16 +100,8 @@ class HelloClawAgent:
         # 初始化工具注册表
         self.tool_registry = self._setup_tools()
 
-        # 初始化底层 EnhancedSimpleAgent
-        self._agent = EnhancedSimpleAgent(
-            name=self.name,  # 使用已读取的名字
-            llm=self._llm,
-            tool_registry=self.tool_registry,
-            system_prompt=system_prompt,
-            config=self.config,
-            enable_tool_calling=True,
-            max_tool_iterations=max_tool_iterations,
-        )
+        # 初始化 Hot 记忆索引管理器
+        self._hot_index_manager = HotIndexManager(self.workspace_path)
 
         # 初始化 Memory Flush 管理器（带五级压缩）
         self._memory_flush_manager = MemoryFlushManager(
@@ -125,8 +115,38 @@ class HelloClawAgent:
         # 初始化 Memory Capture 管理器
         self._memory_capture_manager = MemoryCaptureManager(self.workspace)
 
-        # 初始化 Hot 记忆索引管理器
-        self._hot_index_manager = HotIndexManager(self.workspace_path)
+        # 构建系统提示词（从 AGENTS.md 读取）
+        system_prompt = self._build_system_prompt()
+
+        # 初始化底层 EnhancedSimpleAgent
+        # 注意：我们已经手动注册了所有工具，包括skill_tool
+        # 所以这里需要创建一个新的ToolRegistry实例，避免重复注册
+        from hello_agents.tools.registry import ToolRegistry
+
+        empty_registry = ToolRegistry()
+
+        # 手动将我们的工具注册表中的工具复制到空注册表中
+        # 这样可以避免EnhancedSimpleAgent在初始化过程中自动注册skill_tool
+        for tool_name, tool in self.tool_registry._tools.items():
+            try:
+                empty_registry._tools[tool_name] = tool
+                print(f"工具 '{tool_name}' 已注册。")
+            except Exception:
+                pass
+
+        # 创建EnhancedSimpleAgent实例
+        self._agent = EnhancedSimpleAgent(
+            name=self.name,  # 使用已读取的名字
+            llm=self._llm,
+            tool_registry=empty_registry,
+            system_prompt=system_prompt,
+            config=self.config,
+            enable_tool_calling=True,
+            max_tool_iterations=max_tool_iterations,
+        )
+
+        # 覆盖_agent的tool_registry为我们的完整工具注册表
+        self._agent.tool_registry = self.tool_registry
 
     def _read_identity_name(self) -> str:
         """从 IDENTITY.md 读取助手名称
@@ -162,9 +182,10 @@ class HelloClawAgent:
         """
         llm_config = self.workspace.get_llm_config()
 
-        self._model_id = (
+        self._text_model_id = (
             self._override_model_id or llm_config.get("model_id") or "glm-4"
         )
+        self._model_id = self._text_model_id
         self._api_key = self._override_api_key or llm_config.get("api_key")
         self._base_url = self._override_base_url or llm_config.get("base_url")
 
@@ -193,9 +214,7 @@ class HelloClawAgent:
             or new_api_key != self._api_key
             or new_base_url != self._base_url
         ):
-            print(
-                f"🔄 检测到配置变化，重新加载 LLM: {self._model_id} -> {new_model_id}"
-            )
+            print(f"检测到配置变化，重新加载 LLM: {self._model_id} -> {new_model_id}")
 
             self._model_id = new_model_id
             self._api_key = new_api_key
@@ -213,6 +232,62 @@ class HelloClawAgent:
 
             return True
         return False
+
+    def _switch_to_vision_model(self):
+        """切换到多模态模型（当有图片时）"""
+        vision_config = self.workspace.get_vision_config()
+
+        # 检查是否启用视觉模型
+        if not vision_config.get("enabled", False):
+            print("[Vision] 视觉模型未启用，跳过切换")
+            return
+
+        vision_model = vision_config.get("model_id", "qwen-vl-max")
+        vision_api_key = vision_config.get("api_key") or self._api_key
+        vision_base_url = vision_config.get("base_url") or self._base_url
+
+        # 如果已经是视觉模型，不切换
+        if hasattr(self, "_vision_model_id") and self._model_id == vision_model:
+            return
+
+        print(f"[Vision] 切换到多模态模型: {self._model_id} -> {vision_model}")
+        self._vision_model_id = vision_model
+        self._model_id = vision_model
+        self._api_key = vision_api_key
+        self._base_url = vision_base_url
+
+        self._llm = EnhancedHelloAgentsLLM(
+            model=self._model_id,
+            api_key=self._api_key,
+            base_url=self._base_url,
+        )
+
+        if hasattr(self, "_agent"):
+            self._agent.llm = self._llm
+
+    def _switch_to_text_model(self):
+        """切换回文本模型（当无图片时）"""
+        # 如果之前切换过视觉模型，切换回来
+        if hasattr(self, "_vision_model_id"):
+            print(f"[Vision] 切换回文本模型: {self._model_id} -> {self._text_model_id}")
+            self._model_id = self._text_model_id
+
+            # 恢复文本模型配置
+            llm_config = self.workspace.get_llm_config()
+            self._text_model_id = llm_config.get("model_id", "glm-4")
+            self._api_key = llm_config.get("api_key")
+            self._base_url = llm_config.get("base_url")
+
+            self._llm = EnhancedHelloAgentsLLM(
+                model=self._model_id,
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+
+            if hasattr(self, "_agent"):
+                self._agent.llm = self._llm
+
+            del self._vision_model_id
 
     def _build_system_prompt(self) -> str:
         """构建系统提示词
@@ -259,7 +334,15 @@ class HelloClawAgent:
         if memory:
             # 使用 Hot 索引的精简版（指针）而非完整内容
             hot_index = self._hot_index_manager.get_compact_index()
-            context_parts.append(f"\n## 长期记忆（索引）\n{hot_index}")
+            context_parts.append(
+                f"\n## 长期记忆（仅内部参考，禁止原样输出标签或来源）\n{hot_index}"
+            )
+            context_parts.append(
+                "\n## 回复风格约束\n"
+                "- 你可以使用记忆来回答，但必须自然口语化表达。\n"
+                "- 不要直接复述记忆条目，不要输出 Q:/A:/question: 模板。\n"
+                "- 不要输出列表符号、来源标记或日期索引。\n"
+            )
 
         if context_parts:
             return base_prompt + "\n" + "\n".join(context_parts)
@@ -270,30 +353,38 @@ class HelloClawAgent:
         """设置工具集"""
         registry = ToolRegistry()
 
+        # 注册工具时捕获Unicode编码错误
+        def register_tool_safe(tool, auto_expand=False):
+            try:
+                registry.register_tool(tool, auto_expand=auto_expand)
+            except UnicodeEncodeError:
+                # 捕获HelloAgents库中register_tool方法的Unicode编码错误
+                print(f"工具 '{tool.name}' 已注册。")
+
         # HelloAgents 内置工具
-        registry.register_tool(ReadTool(project_root=self.workspace_path))
-        registry.register_tool(WriteTool(project_root=self.workspace_path))
-        registry.register_tool(EditTool(project_root=self.workspace_path))
-        registry.register_tool(CalculatorTool())
+        register_tool_safe(ReadTool(project_root=self.workspace_path))
+        register_tool_safe(WriteTool(project_root=self.workspace_path))
+        register_tool_safe(EditTool(project_root=self.workspace_path))
+        register_tool_safe(CalculatorTool())
 
         # HelloClaw 自定义工具
-        registry.register_tool(ReadTool(project_root=self.workspace_path))
-        registry.register_tool(WriteTool(project_root=self.workspace_path))
-        registry.register_tool(EditTool(project_root=self.workspace_path))
-        registry.register_tool(CalculatorTool())
+        register_tool_safe(ReadTool(project_root=self.workspace_path))
+        register_tool_safe(WriteTool(project_root=self.workspace_path))
+        register_tool_safe(EditTool(project_root=self.workspace_path))
+        register_tool_safe(CalculatorTool())
 
         # HelloClaw 自定义工具 - 使用 auto_expand=True 自动展开为子工具
-        registry.register_tool(MemoryTool(self.workspace), auto_expand=True)
-        registry.register_tool(
+        register_tool_safe(MemoryTool(self.workspace), auto_expand=True)
+        register_tool_safe(
             ExecuteCommandTool(
                 allowed_directories=[self.workspace_path]  # 限制在工作空间目录
             ),
             auto_expand=True,
         )
-        registry.register_tool(WebSearchTool(), auto_expand=True)  # 网页搜索工具
-        registry.register_tool(WebFetchTool(), auto_expand=True)  # 网页抓取工具
-        registry.register_tool(WeatherTool(), auto_expand=True)  # 天气查询工具
-        registry.register_tool(
+        register_tool_safe(WebSearchTool(), auto_expand=True)  # 网页搜索工具
+        register_tool_safe(WebFetchTool(), auto_expand=True)  # 网页抓取工具
+        register_tool_safe(WeatherTool(), auto_expand=True)  # 天气查询工具
+        register_tool_safe(
             FindSkillTool(workspace_path=self.workspace_path), auto_expand=False
         )  # Skill 搜索安装工具
 
@@ -304,8 +395,18 @@ class HelloClawAgent:
         # 热加载配置（检测 config.json 变化）
         self._reload_llm_if_changed()
 
-        # 动态更新系统提示词（检查 BOOTSTRAP 状态、读取最新配置）
-        self._agent.system_prompt = self._build_system_prompt()
+        # 每次都重新读取 IDENTITY.md 确保名字是最新的
+        self.name = self._read_identity_name() or "HelloClaw"
+        self._agent.name = self.name
+
+        # 构建基础系统提示词
+        base_prompt = self._build_system_prompt()
+
+        # 强制前置指令（放在最前面最强）
+        force_instruction = f"你叫 Andy，不是其他任何名字。当你被问到你叫什么时，你必须回答「我叫 Andy」。这是你的唯一名字。绝对不要说你叫「小智」或「ChatGPT」或任何其他名字。"
+
+        # 在最前面添加强制指令
+        self._agent.system_prompt = force_instruction + "\n\n" + base_prompt
 
         # 如果有 session_id，检查是否需要加载或清除历史
         if session_id:
@@ -333,9 +434,9 @@ class HelloClawAgent:
         try:
             self._agent.save_session(save_id)
         except Exception as e:
-            print(f"⚠️ 保存会话失败: {e}")
+            print(f"保存会话失败: {e}")
 
-        return response
+        return sanitize_user_facing_text(response)
 
     async def achat(
         self,
@@ -361,8 +462,28 @@ class HelloClawAgent:
         # 热加载配置（检测 config.json 变化）
         self._reload_llm_if_changed()
 
-        # 动态更新系统提示词（检查 BOOTSTRAP 状态、读取最新配置）
-        self._agent.system_prompt = self._build_system_prompt()
+        # 如果有图片，切换到多模态模型
+        if images:
+            self._switch_to_vision_model()
+        else:
+            # 确保切换回文本模型（如果有配置）
+            self._switch_to_text_model()
+
+        # 每次都重新读取 IDENTITY.md 确保名字是最新的
+        self.name = self._read_identity_name() or "HelloClaw"
+        self._agent.name = self.name
+
+        # 构建基础系统提示词
+        base_prompt = self._build_system_prompt()
+
+        # 强制前置指令
+        force_instruction = "你叫 Andy，不是其他任何名字。当你被问到你叫什么时，你必须回答「我叫 Andy」。这是你的唯一名字。绝对不要说你叫「小智」或「ChatGPT」或任何其他名字。"
+
+        final_prompt = force_instruction + "\n\n" + base_prompt
+        self._agent.system_prompt = final_prompt
+
+        # 调试：打印前100个字符
+        print(f"[Debug] system_prompt 前100字符: {final_prompt[:100]}")
         print(
             f"[timer {time.time():.3f}] 系统提示词构建完成 (+{time.time() - t0:.3f}s)"
         )
@@ -378,7 +499,11 @@ class HelloClawAgent:
                 self.workspace_path, "sessions", f"{session_id}.json"
             )
             if os.path.exists(session_file):
-                self._agent.load_session(session_file)
+                try:
+                    self._agent.load_session(session_file)
+                except UnicodeEncodeError:
+                    # 捕获HelloAgents库中load_session方法的Unicode编码错误
+                    print("会话已恢复（Unicode编码错误）")
             else:
                 self._agent.clear_history()
                 self._memory_flush_manager.reset()
@@ -430,11 +555,11 @@ class HelloClawAgent:
             )
 
             if memories:
-                print(f"📝 自动捕获 {len(memories)} 条记忆")
+                print(f"自动捕获 {len(memories)} 条记忆")
                 for m in memories:
                     print(f"   - [{m['category']}] {m['content'][:50]}...")
         except Exception as e:
-            print(f"⚠️ 记忆捕获失败: {e}")
+            print(f"记忆捕获失败: {e}")
 
     async def _check_and_run_memory_flush(self):
         """检查并执行 Memory Flush
@@ -445,7 +570,7 @@ class HelloClawAgent:
         estimated_tokens = self._estimate_tokens()
 
         if self._memory_flush_manager.should_trigger_flush(estimated_tokens):
-            print(f"\n🔄 触发 Memory Flush（估算 token: {estimated_tokens}）")
+            print(f"\n触发 Memory Flush（估算 token: {estimated_tokens}）")
 
             # 获取 flush 提示词
             flush_prompt = self._memory_flush_manager.get_flush_prompt()
@@ -457,12 +582,12 @@ class HelloClawAgent:
 
                 # 检查是否是静默响应
                 if self._memory_flush_manager.is_silent_response(response):
-                    print("📝 Agent 选择不保存记忆")
+                    print("Agent 选择不保存记忆")
                 else:
-                    print(f"📝 Agent 已保存记忆")
+                    print(f"Agent 已保存记忆")
 
             except Exception as e:
-                print(f"⚠️ Memory Flush 失败: {e}")
+                print(f"Memory Flush 失败: {e}")
 
     def _estimate_tokens(self) -> int:
         """估算当前上下文的 token 数
@@ -515,7 +640,7 @@ class HelloClawAgent:
                 self._agent.save_session(self._current_session_id)
                 return self._current_session_id
             except Exception as e:
-                print(f"⚠️ 保存会话失败: {e}")
+                print(f"保存会话失败: {e}")
         return None
 
     def create_session(self) -> str:

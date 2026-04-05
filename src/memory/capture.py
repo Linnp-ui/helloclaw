@@ -1,12 +1,15 @@
 """记忆捕获管理器 - 自动识别并存储对话中的重要信息"""
 
 import asyncio
+import logging
 import os
 import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 from .hot_index import HotIndexManager
+
+logger = logging.getLogger(__name__)
 
 
 # 记忆触发规则
@@ -156,7 +159,11 @@ class MemoryCaptureManager:
         Returns:
             实际存储的记忆列表
         """
+        logger.info(
+            f"[MemoryCapture] capture_and_store() 开始捕获 - text: {text[:100]}..."
+        )
         memories = self.capture(text)
+        logger.info(f"[MemoryCapture] 识别到 {len(memories)} 条潜在记忆")
         stored = []
 
         for memory in memories:
@@ -166,17 +173,26 @@ class MemoryCaptureManager:
                     content=memory["content"],
                     category=memory["category"],
                     date=date,
+                    source="auto",
+                    context="对话中自动捕获",
                 )
+                logger.info(
+                    f"[MemoryCapture] 已存储到每日记忆: [{memory['category']}] {memory['content'][:50]}..."
+                )
+
                 # 同时更新 Hot 索引
                 self._hot_index.add_entry(
                     content=memory["content"],
                     category=memory["category"],
                     source=(date or datetime.now()).strftime("%Y-%m-%d"),
                 )
+                logger.info(f"[MemoryCapture] 已更新 Hot 索引")
+
                 stored.append(memory)
             except Exception as e:
-                print(f"⚠️ 存储记忆失败: {e}")
+                logger.error(f"[MemoryCapture] 存储记忆失败: {e}")
 
+        logger.info(f"[MemoryCapture] 捕获完成，共存储 {len(stored)} 条记忆")
         return stored
 
     async def acapture_and_store(self, text: str, date: datetime = None) -> List[dict]:

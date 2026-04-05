@@ -12,6 +12,7 @@ from .topic_manager import TopicManager
 from .session_archive import SessionArchiveManager
 from .snip import SnipManager, SmartSnipManager
 from .microcompact import MicrocompactManager, MicrocompactMiddleware
+from .memory_refiner import MemoryRefiner, get_memory_refiner
 
 __all__ = [
     "SessionSummarizer",
@@ -26,4 +27,6 @@ __all__ = [
     "ContextCollapseManager",
     "AutocompactManager",
     "ReactiveCompactManager",
+    "MemoryRefiner",
+    "get_memory_refiner",
 ]

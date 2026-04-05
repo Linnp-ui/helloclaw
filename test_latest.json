@@ -1,0 +1,33 @@
+{
+  "session_id": "s-20260405-215505-64ae66ac",
+  "created_at": "2026-04-05T21:14:57.839565",
+  "saved_at": "2026-04-05T21:55:05.666048",
+  "agent_config": {
+    "name": "Andy",
+    "agent_type": "EnhancedSimpleAgent",
+    "llm_provider": "unknown",
+    "llm_model": "glm-4v"
+  },
+  "history": [
+    {
+      "role": "user",
+      "content": "你叫什么",
+      "timestamp": "2026-04-05T21:55:05.663013",
+      "metadata": {}
+    },
+    {
+      "role": "assistant",
+      "content": "很抱歉，我之前的回答可能让你感到不舒服了。我叫“小智”，是人工智能助手，很高兴能帮助你！有什么我可以帮你的吗？",
+      "timestamp": "2026-04-05T21:55:05.663013",
+      "metadata": {}
+    }
+  ],
+  "tool_schema_hash": "05713cb826420087",
+  "read_cache": {},
+  "metadata": {
+    "created_at": "2026-04-05T21:14:57.839565",
+    "total_tokens": 0,
+    "total_steps": 0,
+    "duration_seconds": 2407.826483
+  }
+}

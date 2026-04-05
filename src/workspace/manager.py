@@ -95,16 +95,25 @@ class WorkspaceManager:
         """获取视觉模型配置
 
         Returns:
-            包含 enabled, max_image_size 的字典
+            包含 model_id, api_key, base_url, enabled, max_image_size 的字典
         """
         global_config = self.load_global_config()
         vision_config = global_config.get("vision", {})
 
+        # 优先从环境变量读取，其次从 config.json 读取
         return {
-            "enabled": vision_config.get("enabled", False),
-            "max_image_size": vision_config.get(
-                "max_image_size", 10485760
-            ),  # 默认 10MB
+            "model_id": os.getenv("VISION_MODEL_ID")
+            or vision_config.get("model_id", "qwen-vl-max"),
+            "api_key": os.getenv("VISION_API_KEY")
+            or vision_config.get("api_key")
+            or os.getenv("LLM_API_KEY"),
+            "base_url": os.getenv("VISION_BASE_URL")
+            or vision_config.get("base_url")
+            or os.getenv("LLM_BASE_URL"),
+            "enabled": os.getenv("VISION_ENABLED", "").lower() == "true"
+            or vision_config.get("enabled", False),
+            "max_image_size": int(os.getenv("VISION_MAX_IMAGE_SIZE", "0"))
+            or vision_config.get("max_image_size", 10485760),  # 默认 10MB
         }
 
     # ==================== 入职状态检测 ====================
@@ -180,12 +189,19 @@ class WorkspaceManager:
             content: 配置文件内容
         """
         config_path = self.get_config_path(name)
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(content)
 
-        # 如果保存的是 IDENTITY，检查是否需要删除 BOOTSTRAP
-        if name == "IDENTITY":
-            self._check_and_delete_bootstrap()
+            # 如果保存的是 IDENTITY，检查是否需要删除 BOOTSTRAP
+            if name == "IDENTITY":
+                self._check_and_delete_bootstrap()
+        except PermissionError as e:
+            print(f"保存配置文件失败（权限错误）: {name}.md - {e}")
+            print(f"  路径: {config_path}")
+            print(f"  请确保你有足够的权限写入此目录")
+        except Exception as e:
+            print(f"保存配置文件失败: {name}.md - {e}")
 
     def list_configs(self) -> list:
         """列出所有配置文件
@@ -659,13 +675,17 @@ class WorkspaceManager:
         content: str,
         category: str,
         date: datetime = None,
+        source: str = "auto",
+        context: str = None,
     ):
-        """追加带分类标签的记忆
+        """追加带分类标签的记忆（增强版）
 
         Args:
             content: 记忆内容
             category: 分类标签（preference/decision/entity/fact）
             date: 日期，默认为今天
+            source: 来源标识 - "user"(用户主动) / "auto"(自动捕获) / "manual"(手动添加)
+            context: 可选的上下文描述，如 "在讨论音乐时提到"
         """
         memory_path = self.get_daily_memory_path(date)
         timestamp = datetime.now().strftime("%H:%M")
@@ -676,9 +696,27 @@ class WorkspaceManager:
             with open(memory_path, "w", encoding="utf-8") as f:
                 f.write(f"# {date_str}\n")
 
-        # 追加带分类标签的记忆
+        # 构建记忆条目
+        lines = []
+
+        # 来源标识（用于后续分析和过滤）
+        source_marker = {
+            "user": "👤",
+            "auto": "🤖",
+            "manual": "📝",
+        }.get(source, "🤖")
+
+        # 如果有上下文，添加场景描述
+        if context:
+            lines.append(f"\n### 📍 {context}")
+
+        # 主记忆内容
+        memory_line = f"- [{category}] {content}"
+        lines.append(memory_line)
+
+        # 追加到文件
         with open(memory_path, "a", encoding="utf-8") as f:
-            f.write(f"\n## {timestamp} - 自动捕获\n\n- [{category}] {content}\n")
+            f.write("\n" + "\n".join(lines) + "\n")
 
     def check_duplicate_memory(self, content: str, threshold: float = 0.7) -> bool:
         """检查记忆是否重复

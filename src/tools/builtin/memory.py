@@ -30,6 +30,11 @@ class MemoryTool(Tool):
         )
         self.workspace = workspace_manager
 
+        # 记忆精炼器（用于处理搜索结果）
+        from ...memory.memory_refiner import get_memory_refiner
+
+        self._refiner = get_memory_refiner()
+
     def run(self, parameters: Dict[str, Any]) -> ToolResponse:
         """默认执行：根据 action 参数执行对应操作"""
         action = parameters.get("action", "")
@@ -79,7 +84,7 @@ class MemoryTool(Tool):
         self, content: str, category: Optional[str] = None
     ) -> ToolResponse:
         if category:
-            self.workspace.append_classified_memory(content, category)
+            self.workspace.append_classified_memory(content, category, source="manual")
         else:
             self.workspace.append_to_daily_memory(content)
         return ToolResponse.success(
@@ -136,8 +141,8 @@ class MemoryTool(Tool):
                 data={"results": [], "keyword": keyword},
             )
 
-        # 格式化结果
-        formatted_parts = []
+        # 组装原始记忆内容
+        raw_parts = []
         total_matches = 0
 
         for r in results:
@@ -146,18 +151,39 @@ class MemoryTool(Tool):
             total_matches += len(matches)
 
             for m in matches:
-                start = m["start_line"]
-                end = m["end_line"]
                 content = m["content"]
-                line_range = f"行 {start}" if start == end else f"行 {start}-{end}"
-                formatted_parts.append(
-                    f"**{source}** ({line_range}):\n```\n{content}\n```"
-                )
+                raw_parts.append(content)
 
+        raw_memory = "\n".join(raw_parts)
+
+        # 用小模型精炼记忆
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[MemorySearch] 原始记忆长度: {len(raw_memory)} 字符")
+
+        refined = ""
+        try:
+            import asyncio
+
+            refined = asyncio.get_event_loop().run_until_complete(
+                self._refiner.arefine(raw_memory)
+            )
+        except Exception as e:
+            logger.error(f"[MemorySearch] 精炼失败: {e}")
+            refined = raw_memory  # 失败时回退到原始内容
+
+        logger.info(f"[MemorySearch] 精炼后长度: {len(refined)} 字符")
+
+        # 返回精炼后的内容（供 Agent 参考，不要直接输出给用户）
         return ToolResponse.success(
-            text=f"找到 {total_matches} 处匹配 '{keyword}':\n\n"
-            + "\n\n".join(formatted_parts),
-            data={"results": results, "count": total_matches, "keyword": keyword},
+            text=f"找到 {total_matches} 处匹配 '{keyword}':\n\n{refined}",
+            data={
+                "results": results,
+                "count": total_matches,
+                "keyword": keyword,
+                "refined": refined,
+            },
         )
 
     @tool_action("memory_search", "搜索历史记忆")
@@ -234,7 +260,7 @@ class MemoryTool(Tool):
         """
         if category:
             # 使用带分类标签的存储
-            self.workspace.append_classified_memory(content, category)
+            self.workspace.append_classified_memory(content, category, source="manual")
             return f"已添加到今日记忆 [{category}]: {content[:50]}..."
         else:
             # 使用原有方法

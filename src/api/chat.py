@@ -8,8 +8,9 @@ import logging
 from typing import Optional, List
 
 from fastapi import APIRouter, Request, UploadFile, File
-from fastapi.responses import EventSourceResponse
 from pydantic import BaseModel
+
+from sse_starlette.sse import EventSourceResponse
 
 os.environ["SSE_STARLETTE_DEBUG"] = "0"
 

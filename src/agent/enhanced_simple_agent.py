@@ -13,6 +13,7 @@ from hello_agents.core.streaming import StreamEvent, StreamEventType
 
 # 导入 HelloClaw 专用 LLM（支持流式工具调用）
 from .enhanced_llm import EnhancedHelloAgentsLLM, StreamToolEventType
+from .response_sanitizer import sanitize_user_facing_text
 
 if TYPE_CHECKING:
     from hello_agents.tools.registry import ToolRegistry
@@ -194,13 +195,14 @@ class EnhancedSimpleAgent(SimpleAgent):
                     ):
                         # 处理文本内容
                         if event.event_type == StreamToolEventType.CONTENT:
+                            chunk_text = sanitize_user_facing_text(event.content or "")
                             yield StreamEvent.create(
                                 StreamEventType.LLM_CHUNK,
                                 self.name,
-                                chunk=event.content,
+                                chunk=chunk_text,
                                 step=current_iteration,
                             )
-                            print(event.content, end="", flush=True)
+                            print(chunk_text, end="", flush=True)
 
                         # 工具调用开始（打印信息，不发送事件）
                         elif event.event_type == StreamToolEventType.TOOL_CALL_START:
@@ -226,7 +228,7 @@ class EnhancedSimpleAgent(SimpleAgent):
 
                 # 无论是否有工具调用，都保存本轮的文本内容
                 if result.content:
-                    final_response = result.content
+                    final_response = sanitize_user_facing_text(result.content)
 
                 if not complete_tool_calls:
                     # 没有工具调用，直接返回
@@ -335,11 +337,12 @@ class EnhancedSimpleAgent(SimpleAgent):
 
                 try:
                     async for chunk in self.llm.astream_invoke(messages, **kwargs):
-                        final_response += chunk
+                        cleaned_chunk = sanitize_user_facing_text(chunk)
+                        final_response += cleaned_chunk
                         yield StreamEvent.create(
-                            StreamEventType.LLM_CHUNK, self.name, chunk=chunk
+                            StreamEventType.LLM_CHUNK, self.name, chunk=cleaned_chunk
                         )
-                        print(chunk, end="", flush=True)
+                        print(cleaned_chunk, end="", flush=True)
                     print()
                 except Exception as e:
                     print(f"❌ 最终回答失败: {e}")
@@ -389,14 +392,18 @@ class EnhancedSimpleAgent(SimpleAgent):
 
             # 保存最终 assistant 回答
             if final_response:
-                self.add_message(Message(final_response, "assistant"))
+                self.add_message(
+                    Message(sanitize_user_facing_text(final_response), "assistant")
+                )
 
             duration = (datetime.now() - session_start_time).total_seconds()
             print(f"\n✅ 完成，耗时 {duration:.2f}s，共 {current_iteration} 轮")
 
             # 发送完成事件
             yield StreamEvent.create(
-                StreamEventType.AGENT_FINISH, self.name, result=final_response
+                StreamEventType.AGENT_FINISH,
+                self.name,
+                result=sanitize_user_facing_text(final_response),
             )
 
         except Exception as e:
