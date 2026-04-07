@@ -458,22 +458,41 @@ class MemoryFlushManager:
             仅包含摘要的消息
         """
         # 提取关键信息
-        user_msgs = [
-            m["content"]
-            for m in messages
-            if m.get("role") == "user" and m.get("content")
-        ]
-        assistant_msgs = [
-            m["content"]
-            for m in messages
-            if m.get("role") == "assistant" and m.get("content")
-        ]
+        user_msgs = []
+        assistant_msgs = []
+        tool_calls = []
+        
+        for m in messages:
+            if m.get("role") == "user" and m.get("content"):
+                user_msgs.append(m["content"])
+            elif m.get("role") == "assistant":
+                if m.get("content"):
+                    assistant_msgs.append(m["content"])
+                if m.get("tool_calls"):
+                    tool_calls.extend(m["tool_calls"])
 
-        summary = f"""[COMPRESSED] Conversation summary:
-- {len(user_msgs)} user messages
-- {len(assistant_msgs)} assistant messages
-- Last user message: {user_msgs[-1][:100] if user_msgs else "N/A"}
-"""
+        # 生成更详细的摘要
+        summary_parts = [
+            "[COMPRESSED] Conversation summary:",
+            f"- {len(user_msgs)} user messages",
+            f"- {len(assistant_msgs)} assistant messages",
+            f"- {len(tool_calls)} tool calls"
+        ]
+        
+        if user_msgs:
+            summary_parts.append(f"- Last user message: {user_msgs[-1][:100] if user_msgs else 'N/A'}")
+        
+        if tool_calls:
+            # 统计工具调用类型
+            tool_types = {}
+            for tc in tool_calls:
+                tool_name = tc.get("function", {}).get("name", "unknown")
+                tool_types[tool_name] = tool_types.get(tool_name, 0) + 1
+            
+            tool_summary = ", ".join([f"{k}({v})" for k, v in tool_types.items()])
+            summary_parts.append(f"- Tool types: {tool_summary}")
+
+        summary = "\n".join(summary_parts)
 
         return [{"role": "system", "content": summary, "_compressed": True}]
 

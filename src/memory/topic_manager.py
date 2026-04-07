@@ -123,13 +123,20 @@ class TopicManager:
 
         return filename
 
-    def update_topic(self, filename: str, content: str, tags: List[str] = None):
+    def update_topic(
+        self,
+        filename: str,
+        content: str = None,
+        tags: List[str] = None,
+        relevance: float = None,
+    ):
         """更新话题内容
 
         Args:
             filename: 话题文件名
-            content: 新内容
-            tags: 新标签
+            content: 新内容（可选）
+            tags: 新标签（可选）
+            relevance: 相关度（可选）
         """
         filepath = os.path.join(self.topics_path, filename)
         if not os.path.exists(filepath):
@@ -138,14 +145,18 @@ class TopicManager:
         with open(filepath, "r", encoding="utf-8") as f:
             old_content = f.read()
 
-        frontmatter, _ = self._extract_frontmatter(old_content)
+        frontmatter, body = self._extract_frontmatter(old_content)
 
         if tags:
             frontmatter["tags"] = tags
 
+        if relevance is not None:
+            frontmatter["relevance"] = relevance
+
         frontmatter["updated"] = datetime.now().strftime("%Y-%m-%d")
 
-        new_content = self._create_frontmatter(frontmatter) + "\n\n" + content
+        new_content_body = content if content is not None else body
+        new_content = self._create_frontmatter(frontmatter) + "\n\n" + new_content_body
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(new_content)
@@ -286,14 +297,12 @@ class TopicManager:
         tags = []
 
         if source_type == "daily_memory":
-            # 从每日记忆读取
             memory_path = os.path.join(self.workspace_path, "memory", source_name)
             if os.path.exists(memory_path):
                 with open(memory_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 tags = ["daily_memory", source_name.replace(".md", "")]
         elif source_type == "session_summary":
-            # 从会话总结读取
             summary_path = os.path.join(self.workspace_path, "memory", source_name)
             if os.path.exists(summary_path):
                 with open(summary_path, "r", encoding="utf-8") as f:

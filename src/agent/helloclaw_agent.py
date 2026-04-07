@@ -1,7 +1,12 @@
 """HelloClaw Agent - 基于 HelloAgents SimpleAgent 的个性化 AI 助手"""
 
 import os
+import logging
 from typing import List, Optional
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 from hello_agents import Config
 from .enhanced_simple_agent import EnhancedSimpleAgent
@@ -130,7 +135,7 @@ class HelloClawAgent:
         for tool_name, tool in self.tool_registry._tools.items():
             try:
                 empty_registry._tools[tool_name] = tool
-                print(f"工具 '{tool_name}' 已注册。")
+                logger.info(f"工具 '{tool_name}' 已注册。")
             except Exception:
                 pass
 
@@ -214,7 +219,7 @@ class HelloClawAgent:
             or new_api_key != self._api_key
             or new_base_url != self._base_url
         ):
-            print(f"检测到配置变化，重新加载 LLM: {self._model_id} -> {new_model_id}")
+            logger.info(f"检测到配置变化，重新加载 LLM: {self._model_id} -> {new_model_id}")
 
             self._model_id = new_model_id
             self._api_key = new_api_key
@@ -239,7 +244,7 @@ class HelloClawAgent:
 
         # 检查是否启用视觉模型
         if not vision_config.get("enabled", False):
-            print("[Vision] 视觉模型未启用，跳过切换")
+            logger.info("[Vision] 视觉模型未启用，跳过切换")
             return
 
         vision_model = vision_config.get("model_id", "qwen-vl-max")
@@ -250,7 +255,7 @@ class HelloClawAgent:
         if hasattr(self, "_vision_model_id") and self._model_id == vision_model:
             return
 
-        print(f"[Vision] 切换到多模态模型: {self._model_id} -> {vision_model}")
+        logger.info(f"[Vision] 切换到多模态模型: {self._model_id} -> {vision_model}")
         self._vision_model_id = vision_model
         self._model_id = vision_model
         self._api_key = vision_api_key
@@ -269,7 +274,7 @@ class HelloClawAgent:
         """切换回文本模型（当无图片时）"""
         # 如果之前切换过视觉模型，切换回来
         if hasattr(self, "_vision_model_id"):
-            print(f"[Vision] 切换回文本模型: {self._model_id} -> {self._text_model_id}")
+            logger.info(f"[Vision] 切换回文本模型: {self._model_id} -> {self._text_model_id}")
             self._model_id = self._text_model_id
 
             # 恢复文本模型配置
@@ -359,15 +364,9 @@ class HelloClawAgent:
                 registry.register_tool(tool, auto_expand=auto_expand)
             except UnicodeEncodeError:
                 # 捕获HelloAgents库中register_tool方法的Unicode编码错误
-                print(f"工具 '{tool.name}' 已注册。")
+                logger.info(f"工具 '{tool.name}' 已注册。")
 
         # HelloAgents 内置工具
-        register_tool_safe(ReadTool(project_root=self.workspace_path))
-        register_tool_safe(WriteTool(project_root=self.workspace_path))
-        register_tool_safe(EditTool(project_root=self.workspace_path))
-        register_tool_safe(CalculatorTool())
-
-        # HelloClaw 自定义工具
         register_tool_safe(ReadTool(project_root=self.workspace_path))
         register_tool_safe(WriteTool(project_root=self.workspace_path))
         register_tool_safe(EditTool(project_root=self.workspace_path))
@@ -377,7 +376,9 @@ class HelloClawAgent:
         register_tool_safe(MemoryTool(self.workspace), auto_expand=True)
         register_tool_safe(
             ExecuteCommandTool(
-                allowed_directories=[self.workspace_path]  # 限制在工作空间目录
+                allowed_directories=[self.workspace_path],  # 限制在工作空间目录
+                timeout=30,  # 限制命令执行时间
+                max_output_size=10000  # 限制输出大小
             ),
             auto_expand=True,
         )
@@ -434,7 +435,7 @@ class HelloClawAgent:
         try:
             self._agent.save_session(save_id)
         except Exception as e:
-            print(f"保存会话失败: {e}")
+            logger.error(f"保存会话失败: {e}")
 
         return sanitize_user_facing_text(response)
 
@@ -457,7 +458,7 @@ class HelloClawAgent:
         import time
 
         t0 = time.time()
-        print(f"[timer {t0:.3f}] achat 开始")
+        logger.info(f"[timer {t0:.3f}] achat 开始")
 
         # 热加载配置（检测 config.json 变化）
         self._reload_llm_if_changed()
@@ -483,8 +484,8 @@ class HelloClawAgent:
         self._agent.system_prompt = final_prompt
 
         # 调试：打印前100个字符
-        print(f"[Debug] system_prompt 前100字符: {final_prompt[:100]}")
-        print(
+        logger.debug(f"[Debug] system_prompt 前100字符: {final_prompt[:100]}")
+        logger.info(
             f"[timer {time.time():.3f}] 系统提示词构建完成 (+{time.time() - t0:.3f}s)"
         )
 
@@ -503,11 +504,11 @@ class HelloClawAgent:
                     self._agent.load_session(session_file)
                 except UnicodeEncodeError:
                     # 捕获HelloAgents库中load_session方法的Unicode编码错误
-                    print("会话已恢复（Unicode编码错误）")
+                    logger.info("会话已恢复（Unicode编码错误）")
             else:
                 self._agent.clear_history()
                 self._memory_flush_manager.reset()
-        print(f"[timer {time.time():.3f}] 会话加载完成 (+{time.time() - t0:.3f}s)")
+        logger.info(f"[timer {time.time():.3f}] 会话加载完成 (+{time.time() - t0:.3f}s)")
 
         # 保存 session_id 供后续保存使用
         self._current_session_id = session_id
@@ -519,20 +520,20 @@ class HelloClawAgent:
         }
 
         t_llm = time.time()
-        print(f"[timer {t_llm:.3f}] 开始调用 LLM ({self._model_id})...")
+        logger.info(f"[timer {t_llm:.3f}] 开始调用 LLM ({self._model_id})...")
         first_chunk = True
 
         async for event in self._agent.arun_stream_with_tools(
             message, images=images, **llm_kwargs
         ):
             if first_chunk and event.type.value == "llm_chunk":
-                print(
+                logger.info(
                     f"[timer {time.time():.3f}] 首个 token 到达 (LLM 延迟: {time.time() - t_llm:.3f}s)"
                 )
                 first_chunk = False
             yield event
 
-        print(
+        logger.info(
             f"[timer {time.time():.3f}] LLM 调用完成 (总耗时: {time.time() - t0:.3f}s)"
         )
 
@@ -555,11 +556,11 @@ class HelloClawAgent:
             )
 
             if memories:
-                print(f"自动捕获 {len(memories)} 条记忆")
+                logger.info(f"自动捕获 {len(memories)} 条记忆")
                 for m in memories:
-                    print(f"   - [{m['category']}] {m['content'][:50]}...")
+                    logger.info(f"   - [{m['category']}] {m['content'][:50]}...")
         except Exception as e:
-            print(f"记忆捕获失败: {e}")
+            logger.error(f"记忆捕获失败: {e}")
 
     async def _check_and_run_memory_flush(self):
         """检查并执行 Memory Flush
@@ -570,7 +571,7 @@ class HelloClawAgent:
         estimated_tokens = self._estimate_tokens()
 
         if self._memory_flush_manager.should_trigger_flush(estimated_tokens):
-            print(f"\n触发 Memory Flush（估算 token: {estimated_tokens}）")
+            logger.info(f"\n触发 Memory Flush（估算 token: {estimated_tokens}）")
 
             # 获取 flush 提示词
             flush_prompt = self._memory_flush_manager.get_flush_prompt()
@@ -582,12 +583,12 @@ class HelloClawAgent:
 
                 # 检查是否是静默响应
                 if self._memory_flush_manager.is_silent_response(response):
-                    print("Agent 选择不保存记忆")
+                    logger.info("Agent 选择不保存记忆")
                 else:
-                    print(f"Agent 已保存记忆")
+                    logger.info(f"Agent 已保存记忆")
 
             except Exception as e:
-                print(f"Memory Flush 失败: {e}")
+                logger.error(f"Memory Flush 失败: {e}")
 
     def _estimate_tokens(self) -> int:
         """估算当前上下文的 token 数
@@ -640,7 +641,7 @@ class HelloClawAgent:
                 self._agent.save_session(self._current_session_id)
                 return self._current_session_id
             except Exception as e:
-                print(f"保存会话失败: {e}")
+                logger.error(f"保存会话失败: {e}")
         return None
 
     def create_session(self) -> str:

@@ -54,6 +54,11 @@ pnpm-debug.log*
 # Test directories
 test_skills/
 test_skills*/
+htmlcov/
+
+# Test coverage
+.coverage
+coverage.xml
 
 # Skills
 skills/

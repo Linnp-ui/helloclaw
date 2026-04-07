@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Set
@@ -54,6 +55,11 @@ class WorkspaceManager:
         self.topics_path = os.path.join(self.workspace_path, "topics")
         self.archive_path = os.path.join(self.workspace_path, "archive")
         self.cache_path = os.path.join(self.workspace_path, "cache")
+        
+        # 记忆搜索缓存
+        self._memory_search_cache = {}
+        self._cache_ttl = 3600  # 缓存过期时间（秒）
+        self._cache_last_update = time.time()
 
     # ==================== 全局配置读取 ====================
 
@@ -188,6 +194,7 @@ class WorkspaceManager:
             name: 配置文件名称
             content: 配置文件内容
         """
+        import traceback
         config_path = self.get_config_path(name)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
@@ -200,8 +207,10 @@ class WorkspaceManager:
             print(f"保存配置文件失败（权限错误）: {name}.md - {e}")
             print(f"  路径: {config_path}")
             print(f"  请确保你有足够的权限写入此目录")
+            print(traceback.format_exc())
         except Exception as e:
             print(f"保存配置文件失败: {name}.md - {e}")
+            print(traceback.format_exc())
 
     def list_configs(self) -> list:
         """列出所有配置文件
@@ -252,6 +261,16 @@ class WorkspaceManager:
         Returns:
             匹配的记忆片段列表
         """
+        # 清理过期缓存
+        self._clear_expired_cache()
+        
+        # 生成缓存键
+        cache_key = f"search:{keyword}:{include_daily}"
+        
+        # 检查缓存
+        if cache_key in self._memory_search_cache:
+            return self._memory_search_cache[cache_key]
+        
         results = []
 
         # 搜索长期记忆
@@ -265,7 +284,7 @@ class WorkspaceManager:
             )
 
         # 搜索每日记忆
-        if include_daily:
+        if include_daily and os.path.exists(self.memory_path):
             for filename in os.listdir(self.memory_path):
                 if filename.endswith(".md"):
                     filepath = os.path.join(self.memory_path, filename)
@@ -278,7 +297,10 @@ class WorkspaceManager:
                                     "content": content,
                                 }
                             )
-
+        
+        # 缓存结果
+        self._memory_search_cache[cache_key] = results
+        
         return results
 
     def search_memory_enhanced(
@@ -297,6 +319,16 @@ class WorkspaceManager:
         Returns:
             匹配的记忆片段列表，包含行号和上下文
         """
+        # 清理过期缓存
+        self._clear_expired_cache()
+        
+        # 生成缓存键
+        cache_key = f"search_enhanced:{keyword}:{include_daily}:{context_lines}"
+        
+        # 检查缓存
+        if cache_key in self._memory_search_cache:
+            return self._memory_search_cache[cache_key]
+        
         results = []
 
         # 搜索长期记忆
@@ -314,7 +346,7 @@ class WorkspaceManager:
                 )
 
         # 搜索每日记忆
-        if include_daily:
+        if include_daily and os.path.exists(self.memory_path):
             for filename in sorted(os.listdir(self.memory_path)):
                 if filename.endswith(".md"):
                     filepath = os.path.join(self.memory_path, filename)
@@ -330,7 +362,10 @@ class WorkspaceManager:
                                 "matches": matches,
                             }
                         )
-
+        
+        # 缓存结果
+        self._memory_search_cache[cache_key] = results
+        
         return results
 
     def _find_matches_with_context(
@@ -927,3 +962,10 @@ class WorkspaceManager:
         matched = sum(1 for kw in keywords if kw in text_lower)
 
         return matched / len(keywords)
+
+    def _clear_expired_cache(self):
+        """清理过期的缓存"""
+        current_time = time.time()
+        if current_time - self._cache_last_update > self._cache_ttl:
+            self._memory_search_cache.clear()
+            self._cache_last_update = current_time

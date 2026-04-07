@@ -59,6 +59,19 @@ async def send_message_sync(request: ChatRequest):
             content="Agent not initialized", session_id=request.session_id
         )
 
+    # 验证输入
+    if not request.message or len(request.message) > 10000:
+        return ChatResponse(
+            content="Invalid message: message must be between 1 and 10000 characters", 
+            session_id=request.session_id
+        )
+
+    if request.images and len(request.images) > 5:
+        return ChatResponse(
+            content="Invalid images: maximum 5 images allowed", 
+            session_id=request.session_id
+        )
+
     response = agent.chat(request.message, request.session_id)
     return ChatResponse(content=response, session_id=request.session_id)
 
@@ -82,6 +95,43 @@ async def send_message_stream(request: ChatRequest, http_request: Request = None
     - done: 完成
     - error: 错误
     """
+    # 验证输入
+    if not request.message or len(request.message) > 10000:
+        async def error_generator():
+            yield {
+                "event": "error",
+                "data": json.dumps(
+                    {"error": "Invalid message: message must be between 1 and 10000 characters"}, 
+                    ensure_ascii=False
+                ),
+            }
+        return EventSourceResponse(
+            error_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if request.images and len(request.images) > 5:
+        async def error_generator():
+            yield {
+                "event": "error",
+                "data": json.dumps(
+                    {"error": "Invalid images: maximum 5 images allowed"}, 
+                    ensure_ascii=False
+                ),
+            }
+        return EventSourceResponse(
+            error_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     parsed_images = request.images
 
     async def event_generator():

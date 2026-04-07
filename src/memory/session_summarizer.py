@@ -10,7 +10,10 @@ class SessionSummarizer:
     """会话总结器
 
     负责在创建新会话时总结旧会话内容，生成结构化摘要保存到 memory 目录。
+    并评估是否有价值合并为话题。
     """
+
+    TOPIC_RELEVANCE_THRESHOLD = 0.6  # 话题相关度阈值
 
     def __init__(
         self,
@@ -34,6 +37,15 @@ class SessionSummarizer:
         self._model_id = model_id
         self._api_key = api_key
         self._base_url = base_url
+        self._topic_manager = None
+
+    def _get_topic_manager(self):
+        """获取话题管理器（延迟加载）"""
+        if self._topic_manager is None:
+            from .topic_manager import TopicManager
+
+            self._topic_manager = TopicManager(self.workspace.workspace_path)
+        return self._topic_manager
 
     async def summarize_session(
         self,
@@ -71,11 +83,202 @@ class SessionSummarizer:
             filename = self._generate_filename(slug)
             self.workspace.save_session_summary(filename, summary)
 
+            # 评估是否值得合并为话题
+            await self._evaluate_and_merge_topic(excerpt, summary, slug, filename)
+
             return filename
 
         except Exception as e:
             print(f"⚠️ 会话总结失败: {e}")
             return None
+
+    async def _evaluate_and_merge_topic(
+        self,
+        excerpt: str,
+        summary: str,
+        slug: str,
+        filename: str,
+    ) -> Optional[str]:
+        """评估会话总结是否有价值合并为话题
+
+        Args:
+            excerpt: 对话节选
+            summary: 生成的总结
+            slug: slug
+            filename: 总结文件名
+
+        Returns:
+            如果成功合并，返回话题文件名；否则返回 None
+        """
+        try:
+            relevance = await self._evaluate_topic_relevance(excerpt, summary)
+
+            if relevance >= self.TOPIC_RELEVANCE_THRESHOLD:
+                topic_title = self._generate_topic_title(summary, slug)
+                tags = self._extract_tags_from_summary(summary)
+
+                topic_mgr = self._get_topic_manager()
+                topic_filename = topic_mgr.merge_into_topic(
+                    source_type="session_summary",
+                    source_name=filename,
+                    topic_title=topic_title,
+                )
+
+                # 更新话题的相关度
+                topic_mgr.update_topic(topic_filename, None, tags)
+
+                print(
+                    f"✅ 会话总结已合并为话题: {topic_filename} (relevance: {relevance:.2f})"
+                )
+                return topic_filename
+            else:
+                print(f"ℹ️ 会话总结未达到话题标准 (relevance: {relevance:.2f})")
+
+        except Exception as e:
+            print(f"⚠️ 评估话题失败: {e}")
+
+        return None
+
+    async def _evaluate_topic_relevance(
+        self,
+        excerpt: str,
+        summary: str,
+    ) -> float:
+        """评估会话内容是否有价值成为话题
+
+        使用关键词匹配 + 简单规则判断
+
+        Returns:
+            相关度分数 (0-1)
+        """
+        # 高价值关键词
+        high_value_keywords = [
+            "决策",
+            "决定",
+            "计划",
+            "方案",
+            "设计",
+            "架构",
+            "decision",
+            "plan",
+            "design",
+            "architecture",
+            "实现",
+            "功能",
+            "feature",
+            "实现方式",
+            "bug",
+            "问题",
+            "修复",
+            "fix",
+            "issue",
+            "配置",
+            "config",
+            "设置",
+            "setup",
+            "学习",
+            "理解",
+            "learn",
+            "understand",
+            "重要",
+            "关键",
+            "important",
+            "key",
+        ]
+
+        # 中等价值关键词
+        medium_value_keywords = [
+            "使用",
+            "如何",
+            "怎么",
+            "方法",
+            "way",
+            "how",
+            "建议",
+            "推荐",
+            "suggest",
+            "recommend",
+            "比较",
+            "对比",
+            "compare",
+            "vs",
+            "区别",
+            "difference",
+            "区别",
+        ]
+
+        text = (excerpt + " " + summary).lower()
+
+        score = 0.0
+
+        # 检查高价值关键词
+        for kw in high_value_keywords:
+            if kw.lower() in text:
+                score += 0.3
+
+        # 检查中等价值关键词
+        for kw in medium_value_keywords:
+            if kw.lower() in text:
+                score += 0.15
+
+        # 检查对话轮数（多轮对话更有价值）
+        turns = excerpt.count("[USER]")
+        if turns >= 3:
+            score += 0.2
+        elif turns >= 2:
+            score += 0.1
+
+        # 检查是否有具体内容（不是简单问答）
+        if len(excerpt) > 200:
+            score += 0.1
+
+        return min(score, 1.0)
+
+    def _generate_topic_title(self, summary: str, slug: str) -> str:
+        """从总结生成话题标题
+
+        Args:
+            summary: 会话总结
+            slug: slug
+
+        Returns:
+            话题标题
+        """
+        # 尝试从总结中提取主题行
+        lines = summary.split("\n")
+        for line in lines:
+            line = line.strip()
+            if line.startswith("主题:") or line.startswith("## "):
+                title = line.lstrip("#: ").strip()
+                if title and len(title) < 50:
+                    return title
+
+        # 使用 slug 作为标题
+        return slug.replace("-", " ").title()
+
+    def _extract_tags_from_summary(self, summary: str) -> List[str]:
+        """从总结中提取标签
+
+        Args:
+            summary: 会话总结
+
+        Returns:
+            标签列表
+        """
+        tags = ["session-summary"]
+
+        # 提取关键词作为标签
+        keywords = re.findall(r"[a-zA-Z]{4,}", summary.lower())
+        from collections import Counter
+
+        word_freq = Counter(keywords)
+
+        # 取最常见的词作为标签
+        for word, _ in word_freq.most_common(3):
+            if word not in ["this", "that", "with", "from", "have", "been", "will"]:
+                tags.append(word)
+
+        return tags[:5]
 
     def _extract_excerpt(
         self,
